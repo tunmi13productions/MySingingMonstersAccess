@@ -734,7 +734,7 @@ local function socialLabel(el, name)
     -- highlight toggle and BUY MORE, told apart by their FunctionName.
     if name:find("^barItem%d+$") and FRIENDLY.__torchLabel then
         local t = FRIENDLY.__torchLabel(el) or FRIENDLY.__upgradeLabel(el) or FRIENDLY.__speedUpLabel(el)
-            or FRIENDLY.__removeLabel(el)
+            or FRIENDLY.__removeLabel(el) or FRIENDLY.__feedLabel(el)
         if t then return t, true end
     end
     -- Promo tray (PromoCenterItem_<id>): a picture plus a countdown. Name the
@@ -2792,6 +2792,21 @@ function FRIENDLY.__speedUpLabel(el)
     if not d or d <= 0 then pcall(function() d = tonumber(game.diamondsLeftToSpeedup()) end) end
     if not d or d <= 0 then return nil end
     return "Speed up, " .. math.floor(d) .. " Diamonds"
+end
+-- FEED on a selected monster's bar: the food it costs, the same number the
+-- bar shows beside the button (template_foodreq.xml: game.objectFoodRequired).
+function FRIENDLY.__feedLabel(el)
+    local text = elementText(el) or ""
+    if text:upper() ~= "FEED" then return nil end
+    local cost = nil
+    pcall(function() cost = tonumber(game.objectFoodRequired()) end)
+    if not FRIENDLY.__feedLogged then
+        FRIENDLY.__feedLogged = true
+        a11y_log("[feed] button text '" .. text .. "', objectFoodRequired " .. tostring(cost))
+    end
+    if not cost or cost <= 0 then return nil end
+    local str = tostring(math.floor(cost)):reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", "")
+    return "Feed, " .. str .. " food"
 end
 -- The in-game Breeding Guide (newsflash "BREEDING GUIDE"): its pages are
 -- pictures with no text, so their words are written out here.

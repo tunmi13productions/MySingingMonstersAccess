@@ -14,6 +14,7 @@ What changed in each version of My Singing Monsters Access, newest first. Change
 ### Improved
 
 - REMOVE on a tree or rock says its price, for example "Remove, 1,250 coins".
+- FEED on a selected monster says how much food it costs, for example "Feed, 1,250 food".
 - After a tree or rock is cleared away, the mod says so and stops, instead of tapping whatever is behind it.
 - When something is in front of a tree or rock you're tapping, the mod zooms in closer and tries again.
 - After an egg cracks, you hear what hatched, for example "You discovered Potbelly!, Class: Natural", and Continue is in the Tab list. Before, only a NEW button showed and the screen couldn't be left.

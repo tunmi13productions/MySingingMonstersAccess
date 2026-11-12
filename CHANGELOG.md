@@ -2,7 +2,7 @@
 
 What changed in each version of My Singing Monsters Access, newest first. Changes that are done but not yet in a release are listed under Unreleased.
 
-## Unreleased
+## 0.1.14-alpha - 2026-11-12
 
 ### Added
 
@@ -10,6 +10,13 @@ What changed in each version of My Singing Monsters Access, newest first. Change
 - Trees and rocks being removed, or ready to finish, get their own Clearing group in the island list, shown only while there are some.
 - The Fuzer: the conjure screen says what it makes, and the three Glowbes are named Red, Green and Blue.
 - A Clubbox guide, linked from the README.
+- When a new version of the mod is out, the game tells you a few seconds after your island loads, with the food-ready sound, and says to run update.bat. You can turn this off in settings.ini (see the README).
+- Monsters are spread across the stereo field: one on the left of the view sings in your left ear, one on the right in your right ear. Before, the game's own panning left nearly everything in the middle. Control+Shift+S cycles the width (the game's own, gentle, normal, wide, widest) and Control+Shift+Left and Right Arrow fine-tune it. Best with headphones.
+- Number keys 1 to 0 reach the first ten items of any list of 20 or fewer, and Shift+1 to Shift+0 the next ten, such as a monster's buttons: press once to hear it, twice to press it. Control+Shift+N cycles between that, one press acting straight away, and off.
+- Moving a monster or decoration says that Shift+Comma and Shift+Period change its volume or size. The game only shows those sliders while something is being moved.
+- tips.md: every loading-screen tip in the game, sorted by topic, with how to do each one with the mod.
+- install.bat and update.bat turn off Jeode's "Do you wish to load these native mods?" question, so it no longer pops up every time the game starts.
+- Fanfares are described like a film: hatching an egg (the backdrop, the egg cracking, the flash and the monster singing) and buying a new island (the circle of light opening, the eggs and the "Welcome to" sign).
 
 ### Improved
 
@@ -21,6 +28,9 @@ What changed in each version of My Singing Monsters Access, newest first. Change
 - The friend code box says what it's for, reads the code you type or paste, and its buttons say "Send friend request" and "Cancel" instead of Yes and No. Naming a monster says "Save" and "Cancel".
 - Friend card buttons are short: "Light Bob's torch", "Send key to Bob", "Favourite Bob, on/off".
 - Each friend card is in the Tab list once, instead of twice.
+- With more than one Nursery, Breeding Structure or Bakery, "egg ready" or "food ready" is only said on the one that's actually ready, instead of on all of them. The Rare and Epic egg shimmer is also read from the right Nursery.
+- A selected monster's buttons say what the game shows next to them: COLLECT says how much is waiting ("Collect, 126 coins"), FEED says how far it is towards the next level and the food it costs ("Feed, 2 of 4 towards level 10, 3,840 food"), and BIGGIFY and COSTUMES say when they're on sale. On Ethereal and Amber islands, earnings are called shards and relics instead of coins.
+- The Storage Shed's CONTENTS screen says how many spaces are used and when nothing is stored, instead of just "storage list".
 - The Close button on a building's INFO screen works.
 
 ## 0.1.13-alpha - 2026-11-09

@@ -31,6 +31,7 @@ You do **not** need any programming tools. Everything is already built.
 5. A window opens and talks you through it. It will:
    - find your game folder (if it can't, it tells you how to find it and asks you to paste it),
    - offer to download and install **Jeode**, the mod loader this mod runs on (answer `y`),
+   - turn off Jeode's "Do you wish to load these native mods?" question, so you don't have to answer it every time the game starts (it's the `suppress_native_warnings` setting in the game's `jeode\config.json`; the mod's native part is what reads your keys and talks to your screen reader),
    - copy the mod into the game's `mods` folder,
    - build the mod's menu hooks from your own copy of the game.
 6. When it says **INSTALLED**, press any key to close the window.
@@ -48,6 +49,13 @@ Run **`update.bat`** from the same folder you installed from. It checks GitHub f
 If you already have the newest version, it says so and changes nothing. (Downloading the new zip and running its `install.bat` also works.)
 
 What changed in each version is in the [changelog](CHANGELOG.md), which is also in the zip.
+
+You don't have to remember to check. Each time the game starts, the mod asks GitHub whether there's a newer version. If there is, a few seconds after your island loads you hear the food-ready sound and "My Singing Monsters Access 0.1.14 is out. To update, run update.bat in the folder you installed the mod from." It only sends GitHub the same request `update.bat` does, and if there's no internet it stays quiet. To turn it off, open `mods\msm-a11y\settings.ini` in the game folder (create it if it isn't there) and add these two lines:
+
+```
+[update]
+check=0
+```
 
 ### If Windows or your antivirus complains
 
@@ -80,6 +88,7 @@ Only needed if `install.bat` doesn't work for you.
 - [getting-started.md](getting-started.md): what to do after the tutorial, from your daily routine to breeding, beds and minigames.
 - [breeding-guide.md](breeding-guide.md): what to breed next once the game stops telling you, island by island, with breeding times.
 - [clubbox-guide.md](clubbox-guide.md): the Clubbox event, from the Hype game and its rewards to the CUSTOMIXER.
+- [tips.md](tips.md): every loading-screen tip in the game, sorted by topic, with how to do each one with the mod.
 
 ## Keys
 
@@ -91,11 +100,15 @@ The single-letter keys (A, W, X, M, O, I, C, T) do nothing while a text box is o
 | Enter | Press the current item |
 | Escape or Backspace | Go back: close the screen, cancel, answer No, or deselect. The game's own Escape is tried first. |
 | Home and End | Jump to the first or last item of the current list or screen. |
+| 1 to 9, and 0; Shift+1 to Shift+0 | On a list of 20 items or fewer (such as a monster's buttons or a Yes/No question), 1 is the first item and 0 the tenth, and Shift+1 to Shift+0 are items 11 to 20. Press once to hear it, and press the same number again quickly to press it. They do nothing in a text box, so you can type numbers, and they keep working when Control+Shift+L has turned the single letters off. |
+| Control+Shift+S | Stereo width for the monsters' singing: cycles through the game's own, gentle, normal (the default), wide and widest. The game hears everything from the camera high above the island, so on its own nearly every monster sounds centred; with the mod, a monster on the left of the view sings in your left ear. Best with headphones. The choice is remembered. |
+| Control+Shift+Left and Right Arrow | Stereo width in small steps (0 to 5), for fine-tuning. |
+| Control+Shift+N | Number keys: cycle between "press once to hear, twice to act" (the default), "one press acts" and off. The choice is remembered. |
 | Left bracket and Right bracket | On the island: switch between groups (Buttons, Buildings, Monsters, Decorations, Trees and rocks). While placing an object: jump between nearby landmarks. |
 | Arrow keys | While placing an object: move the placing cursor one tile and hear the spot (free or blocked, what is nearby, Likes close by). Nothing moves in the game until you press Enter. |
 | Enter and Escape | While placing an object: Enter places it where the cursor is, Escape cancels. Tab says the spot again. |
 | Comma and Period | Previous and next item, like Shift+Tab and Tab. While placing an object, after a bracket: step through the free spots next to that object. In a text box they type as normal. |
-| Shift+Comma and Shift+Period | On a slider: lower or raise it (the CUSTOMIXER volumes, the Time Warper, monster volume, decoration size). Shift+Home and Shift+End go to the lowest and highest value, and Enter on a slider resets it. |
+| Shift+Comma and Shift+Period | On a slider: lower or raise it (the CUSTOMIXER volumes, the Time Warper, and while moving something, a monster's volume or a decoration's size). Shift+Home and Shift+End go to the lowest and highest value, and Enter on a slider resets it. |
 | A (fallback: Control+Shift+A) | Status: coins, diamonds, food, level and so on. On the loading screen, how far loading has got. In the Clubbox, the act, your Hype, tickets and time left. |
 | W (fallback: Control+Shift+W) | What now: things that are ready and your current goals. |
 | X (fallback: Control+Shift+X) | XP: how much you have towards the next level and how much is left. |

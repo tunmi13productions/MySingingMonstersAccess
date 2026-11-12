@@ -734,7 +734,7 @@ local function socialLabel(el, name)
     -- highlight toggle and BUY MORE, told apart by their FunctionName.
     if name:find("^barItem%d+$") and FRIENDLY.__torchLabel then
         local t = FRIENDLY.__torchLabel(el) or FRIENDLY.__upgradeLabel(el) or FRIENDLY.__speedUpLabel(el)
-            or FRIENDLY.__removeLabel(el)
+            or FRIENDLY.__removeLabel(el) or FRIENDLY.__monsterBarLabel(el)
         if t then return t, true end
     end
     -- Promo tray (PromoCenterItem_<id>): a picture plus a countdown. Name the
@@ -2319,7 +2319,25 @@ POPUP_READERS.hotel_list = function(popup)
     if used and max then parts[#parts + 1] = used .. " of " .. max .. " beds occupied" end
     local n = 0
     pcall(function() n = game.getMonstersInHotel():size() end)
-    if n == 0 then parts[#parts + 1] = "No monsters are staying here" end
+    if n == 0 then parts[#parts + 1] = "No monsters are staying here. Escape closes it" end
+    return joinSentences(parts)
+end
+
+-- CONTENTS (storage_list, the Storage Shed): how full it is
+-- (template_warehousecapacityavailable: warehouseCapacityUsed/max) and, when
+-- empty, say so; stored items are the WarehouseEntries tiles Tab reaches.
+POPUP_READERS.storage_list = function(popup)
+    local parts = { shownText(popup, "WarehouseTitle") or "Storage" }
+    local used, max = nil, nil
+    pcall(function() used = tonumber(game.warehouseCapacityUsed()); max = tonumber(game.maxWarehouseCapacity()) end)
+    if used and max then parts[#parts + 1] = used .. " of " .. max .. " spaces used" end
+    local n = nil
+    pcall(function() n = game.getDecorationsInWarehouse():size() end)
+    if n == 0 or (n == nil and used == 0) then
+        parts[#parts + 1] = "Nothing is stored here. Escape closes it"
+    elseif n then
+        parts[#parts + 1] = n .. (n == 1 and " item" or " items") .. ". Tab to hear them, Enter to pick one to place"
+    end
     return joinSentences(parts)
 end
 
@@ -2747,6 +2765,53 @@ function FRIENDLY.__removeLabel(el)
     local t = tostring(math.floor(cost)):reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", "")
     return "Remove, " .. t .. " coins"
 end
+-- What a monster earns here (template_collectinfo.xml colours it: shards on
+-- Ethereal islands, relics on Amber, coins elsewhere).
+function FRIENDLY.__earnWord()
+    local w = "coins"
+    pcall(function()
+        if game.isEtherealIsland() then w = "shards" elseif game.isAmberIsland() then w = "relics" end
+    end)
+    return w
+end
+function FRIENDLY.__commas(n)
+    return (tostring(math.floor(n)):reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", ""))
+end
+-- A selected monster's bar (contextbar_def.bin MONSTER): COLLECT shows
+-- "+<earnings>" (template_collectinfo), FEED "-<food>" (template_foodreq),
+-- BIGGIFY and COSTUMES can wear a SALE tag (template_saleindicator).
+function FRIENDLY.__monsterBarLabel(el)
+    local fn = nil; pcall(function() fn = el("FunctionName"):GetString() end)
+    if not fn then return nil end
+    local text = elementText(el)
+    if fn == "collect_currency" then
+        local n = nil
+        pcall(function() n = tonumber(game.monsterEarnings(game.selectedMonsterId())) end)
+        if not n then return nil end
+        if n <= 0 then return (text or "Collect") .. ", nothing to collect yet" end
+        return (text or "Collect") .. ", " .. FRIENDLY.__commas(n) .. " " .. FRIENDLY.__earnWord()
+    elseif fn == "feed_monster" then
+        local n = nil
+        pcall(function() n = tonumber(game.objectFoodRequired()) end)
+        if not n then return nil end
+        local progress = ""
+        pcall(function()
+            local ent = game.GetMonster(game.selectedMonsterId())
+            local fed, lvl = ent:timesFed(), ent:level()
+            if fed and lvl then progress = ", " .. fed .. " of 4 towards level " .. (lvl + 1) end
+        end)
+        return (text or "Feed") .. progress .. ", " .. FRIENDLY.__commas(n) .. " food"
+    elseif fn == "mega_context" or fn == "show_costumes" then
+        local sale = false
+        pcall(function()
+            local tag = findNamed(el, "attachedTemplate", 2)
+            if tag and tag.Text("visible"):GetInt() ~= 0 and tag.Tag("visible"):GetInt() ~= 0 then sale = true end
+        end)
+        if sale then return (text or fn) .. ", on sale" end
+        return nil
+    end
+    return nil
+end
 -- UPGRADE on a selected building's bar: the price the bar shows as a coloured
 -- number (template_upgradecost.xml: game.structureUpgradeCost/Currency/Sale).
 FRIENDLY.__upgradeCurrency = { coins = "Coins", coin = "Coins", diamond = "Diamonds", diamonds = "Diamonds",
@@ -3117,6 +3182,18 @@ function FRIENDLY.__newsTick(root, now)
         say("Breeding guide, page " .. page .. " of " .. total .. ". " .. text, not first)
     end)
 end
+-- What a monster looks like: by name (Dipsters), else by its element letters.
+function FRIENDLY.__lookOf(tid, name)
+    if name and FRIENDLY.__looksByName[name] then return FRIENDLY.__looksByName[name] end
+    local genes = nil
+    pcall(function() genes = tostring(game.monsterTypeGenes(tid)) end)
+    local base = genes and genes:lower():gsub("[^%a]", "")
+    if not base or not base:find("^[a-g]+$") then return nil end
+    local letters = {}
+    for ch in base:gmatch(".") do letters[#letters + 1] = ch end
+    table.sort(letters)
+    return FRIENDLY.__looks[table.concat(letters)]
+end
 function FRIENDLY.__appearance()
     local isMonster = false
     pcall(function() isMonster = game.selectedObjIsMonster() and true or false end)
@@ -3128,7 +3205,7 @@ function FRIENDLY.__appearance()
     if not tid then pcall(function() tid = game.selectedMonsterTypeId() end) end
     local name = nil
     pcall(function() name = cleanText(LOC(game.getMonsterData(tid):name())) end)
-    local byName = name and FRIENDLY.__looksByName[name]
+    local byName = FRIENDLY.__lookOf(tid, name)
     name = FRIENDLY.__withRarity(name or "This monster", tid)
     -- Key the description by the monster's element letters (game.
     -- monsterTypeGenes, same numbering as its name). The portrait codes are
@@ -3981,6 +4058,83 @@ end
 
 local MAX_BUSY_SECONDS = 60 * 60 * 24 * 60     -- larger means "never started" garbage
 
+-- The island's "something is ready" flags (hasNurseryReady etc.) don't say
+-- which building: with a Nursery and a Bonus Nursery, both would say "egg
+-- ready". So decide per building. Is this structure the selected one?
+function FRIENDLY.__isSelected(id)
+    local s = nil
+    pcall(function() s = game.selectedStructureId() end)
+    return s ~= nil and s == id
+end
+-- How many other structures of the same kind (isBakery, isBreeding) are not busy.
+function FRIENDLY.__otherIdle(id, method)
+    local n = 0
+    pcall(function()
+        local ss = game.player():getActiveIsland():structures()
+        for i = 0, ss:size() - 1 do
+            local o = ss[i]
+            if o and o ~= id then
+                local e = nil
+                pcall(function() e = game.GetStructure(o) end)
+                if e and entityIs(e, method) then
+                    local s = 0
+                    pcall(function() s = e:secondsUntilActionDone() or 0 end)
+                    if not (s > 0 and s < MAX_BUSY_SECONDS) then n = n + 1 end
+                end
+            end
+        end
+    end)
+    return n
+end
+-- true / false, or nil when the island has one ready but it can't tell which.
+-- selFn answers for the selected structure (the context bar's own checks).
+function FRIENDLY.__readyHere(id, method, flag, selFn)
+    if not islandReady(flag) then return false end
+    if selFn and FRIENDLY.__isSelected(id) then
+        local v = nil
+        pcall(function() v = selFn() and true or false end)
+        if v ~= nil then return v end
+    end
+    if FRIENDLY.__otherIdle(id, method) == 0 then return true end
+    return nil
+end
+-- Tiebreak when the island has one ready but several idle: a finished,
+-- uncollected timer reads 0 or a little under; a "never started" or emptied
+-- one reads hugely negative. Logs each building's reading when it changes.
+FRIENDLY.__timerLog = {}
+function FRIENDLY.__timerSaysDone(id, kind, secs)
+    local done = secs <= 0 and secs > -MAX_BUSY_SECONDS
+    local key = kind .. tostring(id)
+    local cls = done and "done" or "empty"
+    if FRIENDLY.__timerLog[key] ~= cls then
+        FRIENDLY.__timerLog[key] = cls
+        a11y_log("[" .. kind .. "] structure " .. tostring(id) .. " timer " .. tostring(secs) .. " -> " .. cls)
+    end
+    return done
+end
+-- The nursery object (game.FindNursery(i), the one with getMonsterInEgg)
+-- behind structure ent: same object address. nil when none matches.
+FRIENDLY.__nurseryLogged = {}
+function FRIENDLY.__nurseryFor(ent, id)
+    local want = tostring(ent):match("at (%x+)")
+    if not want then return nil end
+    local found, seen = nil, {}
+    for i = 0, 15 do
+        local nur = nil
+        pcall(function() nur = game.FindNursery(i) end)
+        if not nur then break end
+        local at = tostring(nur):match("at (%x+)")
+        seen[#seen + 1] = tostring(at)
+        if at == want then found = nur; break end
+    end
+    if not FRIENDLY.__nurseryLogged[id] then
+        FRIENDLY.__nurseryLogged[id] = true
+        a11y_log("[nursery] structure " .. tostring(id) .. " at " .. want .. (found and " matched" or " not matched")
+            .. "; nurseries at " .. table.concat(seen, ", "))
+    end
+    return found
+end
+
 local function structureStatus(id)
     local ent = nil
     pcall(function() ent = game.GetStructure(id) end)
@@ -3992,19 +4146,26 @@ local function structureStatus(id)
     pcall(function() upgrading = game.isStructureUpgrading(id) and true or false end)
     if entityIs(ent, "isBakery") then
         if busy then return "baking, " .. durationText(secs) .. " left" end
-        if islandReady("hasBakeryReady") then return "food ready to collect" end
+        local r = FRIENDLY.__readyHere(id, "isBakery", "hasBakeryReady")
+        -- Several idle bakeries and one or more ready: a ready one's timer
+        -- sits at 0 (or just under), an emptied one's reads "never started".
+        if r == nil then r = FRIENDLY.__timerSaysDone(id, "bakery", secs) end
+        if r then return "food ready to collect" end
         return "idle"
     elseif entityIs(ent, "isBreeding") then
         if busy then return "breeding, " .. durationText(secs) .. " left" end
-        if islandReady("hasBreedingReady") then return "breeding finished, egg ready" end
+        local r = FRIENDLY.__readyHere(id, "isBreeding", "hasBreedingReady", function() return game.isBreedingFinished() end)
+        if r == nil then r = FRIENDLY.__timerSaysDone(id, "breeding", secs) end
+        if r then return "breeding finished, egg ready" end
         return "empty"
     elseif entityIs(ent, "isNursery") then
+        local nur = FRIENDLY.__nurseryFor(ent, id)
         if busy then
             -- Rare and Epic eggs shimmer while incubating (a game tip); say
             -- what sighted players see, without naming the monster.
             local look = ""
             pcall(function()
-                local tid = game.FindNursery(0):getMonsterInEgg()
+                local tid = (nur or game.FindNursery(0)):getMonsterInEgg()
                 if tid and tid > 0 then
                     if game.isEpic(tid) then
                         look = ", the egg is wrapped in a dazzling, swirling shimmer: an Epic egg!"
@@ -4015,7 +4176,16 @@ local function structureStatus(id)
             end)
             return "egg hatching, " .. durationText(secs) .. " left" .. look
         end
-        if islandReady("hasNurseryReady") then return "egg ready to hatch" end
+        if nur then
+            -- Its own egg: a monster id while one is in it, 0 or less when empty.
+            local tid = nil
+            pcall(function() tid = nur:getMonsterInEgg() end)
+            if tid and tid > 0 then return "egg ready to hatch" end
+            if tid then return nil end
+        end
+        local r = FRIENDLY.__readyHere(id, "isNursery", "hasNurseryReady", function() return game.eggReadyToHatch() end)
+        if r then return "egg ready to hatch" end
+        if r == nil then return "empty, or egg ready" end
         return nil
     elseif entityIs(ent, "isCastle") then
         if busy then return "upgrading, " .. durationText(secs) .. " left" end
@@ -4099,7 +4269,7 @@ local function monsterStatus(uid)
     end
     local coins = 0
     pcall(function() coins = game.monsterEarnings(uid) or 0 end)
-    if coins > 0 then parts[#parts + 1] = tostring(coins) .. " coins" end
+    if coins > 0 then parts[#parts + 1] = tostring(coins) .. " " .. FRIENDLY.__earnWord() end
     return #parts > 0 and table.concat(parts, ", ") or nil
 end
 
@@ -4672,8 +4842,16 @@ local function watchPlacing()
         placeAt.t = -100                 -- new placement: centre the camera on first move
         menuState.cur = nil
         later(0.3, function()
+            -- The game's side sliders while moving: a monster's volume
+            -- (volume_popup) or a decoration's size (scale_popup).
+            local extra = ""
+            if liveMenu("volume_popup") then
+                extra = " Shift+Comma and Shift+Period change its volume."
+            elseif liveMenu("scale_popup") then
+                extra = " Shift+Comma and Shift+Period change its size."
+            end
             say("Placing " .. (selectedName() or "object") .. ". " .. spotText()
-                .. ". Arrow keys move it, Enter places it, Escape cancels.", false)
+                .. ". Arrow keys move it, Enter places it, Escape cancels." .. extra, false)
         end)
     end
     if not now and wasPlacing then menuState.cur = nil end
@@ -5510,6 +5688,126 @@ function FRIENDLY.__saysContinue(el, depth)
     return false
 end
 
+-- Hatching fanfare, described like a film (MonsterHatchFanfare.lua and
+-- popup_hatch_monster_fanfare.xml): the island fades, black bars slide in,
+-- a coloured backdrop with a drifting pattern (picked by the monster's kind),
+-- the egg glows; each tap sparkles and cracks it; then a white flash, a
+-- jackpot chime, a burst of stars, and the monster appears singing.
+FRIENDLY.__fanBackdrop = {
+    common = "a deep green backdrop", rare = "a teal backdrop", epic = "a backdrop glowing from deep red to orange",
+    dipster = "a dusky backdrop fading from brown into green", seasonal = "a deep maroon backdrop",
+    titansoul = "a backdrop fading from blue to lilac", breeding = "a dark purple backdrop",
+}
+FRIENDLY.__fanPattern = {
+    common = "rows of little grinning, horned monster faces", rare = "rows of round-eyed masks",
+    epic = "rows of grinning faces with spiky crests", dipster = "rows of little flowers",
+    celestial = "purple stars with swirling tails", titansoul = "curling blue spirals",
+}
+function FRIENDLY.__fanKind(root, el)
+    local e = findNamed(root, el, 4)
+    local v = nil
+    if e then pcall(function() v = e:C("Sprite")("spriteName"):GetString() end) end
+    return v and v:lower():match("bg_symbols_(%w+)") or v and v:lower():match("gradient_bg_(%w+)")
+end
+function FRIENDLY.__fanDoor(root)
+    return FRIENDLY.__fanKind(root, "BGPattern") == "dipster"
+end
+POPUP_READERS.popup_hatch_monster_fanfare = function(popup)
+    local back = FRIENDLY.__fanBackdrop[FRIENDLY.__fanKind(popup, "BGGradient") or ""] or "a coloured backdrop"
+    local pat = FRIENDLY.__fanPattern[FRIENDLY.__fanKind(popup, "BGPattern") or ""]
+    local door = FRIENDLY.__fanDoor(popup)
+    a11y_log("[fanfare] backdrop " .. tostring(FRIENDLY.__fanKind(popup, "BGGradient")) .. ", pattern " .. tostring(FRIENDLY.__fanKind(popup, "BGPattern")))
+    local pre = elementText(findNamed(popup, "PreNotification", 4))
+    return joinSentences({
+        "The island fades away, and black bars slide in at the top and bottom of the screen, like at the movies",
+        "Behind them, " .. back .. (pat and (", with " .. pat .. " drifting slowly across it") or ""),
+        door and "In the middle stands a little doorway, glowing softly, with an arrow pointing at it"
+            or "In the middle floats the egg, glowing softly, with an arrow pointing at it",
+        pre,
+    })
+end
+-- New island fanfare (IslandPurchaseFanfare.lua, island_intro.bin, BGHole):
+-- the screen goes dark and a circle of light opens; eggs in a soft white glow
+-- drift past; black bars, "Welcome to", the island's name in big lettering,
+-- then "Click to continue". Most islands film it from the sky 2800 units
+-- above the island and sweep down onto it at the end; Ethereal, Shugabush,
+-- Battle, Seasonal, Wublin and the Ethereal Workshop and Islet (the script's
+-- alternate cutscene) film it up close on the island and pull back at the
+-- end. The island's things are hidden until the end. The texts' alpha reads
+-- 1 throughout, so the beats just queue; the end is when ContinueLabel hides.
+FRIENDLY.__closeUpIslands = { "IslandType_ETHEREAL", "IslandType_SHUGGA", "IslandType_BATTLE", "IslandType_SEASONAL",
+    "IslandType_ETHEREAL_WORKSHOP", "IslandType_UNDERLING", "IslandType_SHADOW_ETHEREAL_ISLET" }
+function FRIENDLY.__islandCloseUp()
+    local t = nil
+    pcall(function() t = game.currentIslandType() end)
+    if t == nil then return false end
+    for _, k in ipairs(FRIENDLY.__closeUpIslands) do
+        local v = nil
+        pcall(function() v = game[k] end)
+        if v ~= nil and v == t then return true end
+    end
+    return false
+end
+POPUP_READERS.popup_purchase_island_fanfare = function(popup)
+    local token = {}
+    FRIENDLY.__islandFan = token
+    local island = readIsland() or "your new island"
+    local close = FRIENDLY.__islandCloseUp()
+    a11y_log("[fanfare] island " .. island .. (close and ", close-up cutscene" or ", sky cutscene"))
+    local sub = elementText(findNamed(popup, "Subtitle", 3))
+    later(0.5, function()
+        say(joinSentences({
+            "Soft glowing lights drift through the air, and black bars slide in at the top and bottom of the screen",
+            "Big lettering fades in: Welcome to " .. island .. (sub and (", " .. sub) or ""),
+            "Click to continue. Tab to Continue",
+        }), false)
+    end)
+    -- The end: the caption shows, then hides after Continue (it starts
+    -- hidden), and the camera moves. Or the screen just goes away.
+    local shown = false
+    local function tick(n)
+        later(0.3, function()
+            if FRIENDLY.__islandFan ~= token then return end
+            local root = liveMenu("popup_purchase_island_fanfare")
+            local cont = root and findNamed(root, "ContinueLabel", 3)
+            local vis = 1
+            if cont then pcall(function() vis = cont:C("Text")("visible"):GetInt() end) end
+            if vis == 1 then shown = true end
+            if not root or (shown and vis == 0) then
+                FRIENDLY.__islandFan = nil
+                say(close and ("The black bars slide away and the view eases back to your usual view of " .. island .. ", as everything on it fades in")
+                    or ("The black bars slide away and the view sweeps down out of the sky, onto " .. island .. ", as everything on it fades in"), false)
+                return
+            end
+            if n < 2000 then tick(n + 1) end
+        end)
+    end
+    tick(0)
+    return joinSentences({
+        close and ("The screen goes almost black. Then a circle of light opens in the middle and slowly widens, showing " .. island)
+            or ("The screen goes almost black. Then a circle of light opens in the middle and slowly widens, showing the sky high above " .. island),
+        "Eggs of the monsters that live here drift across it, each wrapped in a soft white glow, and a wash of light sweeps over everything",
+    })
+end
+-- First visit to an island: its title and what it's for (game.islandFirstTimeDesc,
+-- in a text component called MeinText).
+POPUP_READERS.help_firstTimePopup = function(popup)
+    local title = elementText(findNamed(popup, "TitleLabel", 4))
+    local desc = nil
+    local note = findNamed(popup, "Notification", 4)
+    if note then pcall(function() desc = note:C("MeinText")("text"):GetString() end) end
+    if not desc or desc == "" then pcall(function() desc = game.islandFirstTimeDesc(game.currentIsland()) end) end
+    if desc then desc = cleanText(LOC(desc) or desc) end
+    if desc == "" then desc = nil end
+    return joinSentences({ title, desc })
+end
+function FRIENDLY.__fanTapText()
+    local root = liveMenu("popup_hatch_monster_fanfare")
+    if root and FRIENDLY.__fanDoor(root) then
+        return "Knock knock. The doorway shakes, sparkles fly, and it creaks open a little more with every tap"
+    end
+    return "Tap, tap, tap. The egg wobbles, sparkles fly, and cracks spread across the shell with every tap"
+end
 -- "You discovered Potbelly! Class: Natural", from the fanfare once it shows.
 function FRIENDLY.__hatchedText(panel)
     local function txt(nm) return elementText(findNamed(panel, nm, 1)) end
@@ -5527,7 +5825,19 @@ function nav.hatchedSay(n)
         local panel = findNamed(root, "popup_hatch_monster_fanfare", 3)
         local t = panel and FRIENDLY.__hatchedText(panel)
         if t then
-            say(t .. ". Tab to Continue", true)
+            local name = elementText(findNamed(panel, "PostNotificationMonsterName", 1))
+            name = name and name:gsub("[!%.]+$", "")
+            local tid = name and POPUP_READERS.__typeByName and POPUP_READERS.__typeByName(name)
+            local look = tid and FRIENDLY.__lookOf(tid, name)
+            local new = findNamed(panel, "NewLabel", 1)
+            say(joinSentences({
+                "A white flash fills the screen, a jackpot chime rings out, and a shower of stars bursts from the middle",
+                "There's " .. (name or "your new monster") .. ", singing for you!",
+                look,
+                t,
+                (new and isVisible(new)) and "A tilted green NEW tag pulses beside it" or nil,
+                "Tab to Continue",
+            }), false)
         elseif n < 12 then
             nav.hatchedSay(n + 1)
         else
@@ -5627,7 +5937,7 @@ local function navActivate()
     local isle = false
     pcall(function() isle = (elementName(el) or ""):find("^entry%d") ~= nil and el:parent():name() == "IslandList" end)
     if elementName(el) == "EggImage" then
-        if pressElement(el) then say("Cracking the egg", true); nav.crackEgg(2) end
+        if pressElement(el) then say(FRIENDLY.__fanTapText(), true); nav.crackEgg(2) end
         return
     end
     do
@@ -6218,7 +6528,30 @@ local FINISHED_TEXT = {
 local READY_POLL_SECONDS = 2
 local readyWatch = { t = -100, island = nil, state = {} }
 
+-- A newer release on GitHub (the native update check): once your island
+-- has been up a few seconds, play the food-ready sound and say so, once.
+FRIENDLY.__update = { since = nil, done = false }
+function FRIENDLY.__updateTick(now)
+    local U = FRIENDLY.__update
+    if U.done then return end
+    U.since = U.since or now
+    if now - U.since < 5 then return end
+    U.fn = U.fn or resolve("a11y_update_version")
+    local ver = nil
+    if U.fn then pcall(function() ver = U.fn() end) end
+    if not ver then
+        if now - U.since > 60 then U.done = true end   -- no answer: stop looking
+        return
+    end
+    U.done = true
+    a11y_log("[update] version " .. tostring(ver) .. " is out")
+    pcall(function() lua_sys.playSoundFx("audio/sfx/food_ready.wav") end)
+    later(1, function()
+        say("My Singing Monsters Access " .. tostring(ver) .. " is out. To update, run update.bat in the folder you installed the mod from.", false)
+    end)
+end
 local function watchReady(now)
+    pcall(FRIENDLY.__updateTick, now)
     if now - readyWatch.t < READY_POLL_SECONDS then return end
     readyWatch.t = now
     local isl, islId = nil, nil
@@ -6696,6 +7029,32 @@ if type(jeode) == "table" and type(jeode.registerGlobal) == "function" then
         if placing() then spotStep(dir) return end
         if nav.textEntryOpen and nav.textEntryOpen() then return end
         navMove(dir)
+    end)
+    -- Number keys 1 to 0 (items 1-10) and Shift+1 to Shift+0 (11-20): the
+    -- items of a list of 20 or fewer. One
+    -- press moves there and says it; go (a second press of the same key, or
+    -- any press in instant mode, Control+Shift+N; decided natively) presses it.
+    jeode.registerGlobal("a11y_numKey", function(n, go)
+        if FRIENDLY.__keysLocked() then return end
+        if nav.textEntryOpen and nav.textEntryOpen() then return end
+        if placing() and (not popupOpen() or menuState.sidePanels[currentPopupName()]) then return end
+        local count
+        if vmenu.active then
+            count = #vmenu.items
+        else
+            if not navEnsure() then
+                if popupOpen() then say("Nothing to navigate in this dialog", true) end
+                return
+            end
+            count = #nav.items
+        end
+        if count > 20 then
+            say("Number keys work on lists of 20 or fewer. This one has " .. count, true)
+            return
+        end
+        if n > count then say("No item " .. n .. ". This list has " .. count, true) return end
+        if vmenu.active then vmenu.index = n else nav.index = n end
+        if go then navActivate() else navMove(0) end
     end)
     -- Control Shift C: the game's own default island view (what it uses after
     -- the island fanfare). Placing re-centres on the object at the next arrow.

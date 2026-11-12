@@ -81,6 +81,38 @@ if ((Test-Path $jeodeDll) -and (Test-Path $proxyDll)) {
     Say "Jeode installed." Green
 }
 
+# --- Jeode's native-mod question ---------------------------------------------
+# Jeode asks "Do you wish to load these native mods?" at every launch, because
+# this mod has a native part (a11y.dll, for keys and speech). Turn that
+# question off in jeode\config.json ("suppress_native_warnings"), keeping every
+# other setting as it is. If the file isn't there yet (Jeode writes it on its
+# first run), create it with Jeode's usual settings.
+$jeodeConfig = Join-Path $GamePath "jeode\config.json"
+try {
+    if (Test-Path $jeodeConfig) {
+        $text = [IO.File]::ReadAllText($jeodeConfig)
+        if ($text -match '"suppress_native_warnings"\s*:\s*true') {
+            $changed = $false
+        } elseif ($text -match '"suppress_native_warnings"\s*:\s*false') {
+            $text = $text -replace '("suppress_native_warnings"\s*:\s*)false', '${1}true'
+            $changed = $true
+        } else {
+            $cfg = $text | ConvertFrom-Json
+            $cfg | Add-Member -NotePropertyName "suppress_native_warnings" -NotePropertyValue $true -Force
+            $text = $cfg | ConvertTo-Json
+            $changed = $true
+        }
+        if ($changed) { [IO.File]::WriteAllText($jeodeConfig, $text) }
+    } else {
+        New-Item -ItemType Directory -Force (Split-Path -Parent $jeodeConfig) | Out-Null
+        $text = "{`r`n  `"last_update_check`": 0,`r`n  `"overlays_enabled`": false,`r`n  `"debug`": false,`r`n  `"allow_unsafe_functions`": false,`r`n  `"suppress_native_warnings`": true,`r`n  `"toggle_key`": `"F1`"`r`n}`r`n"
+        [IO.File]::WriteAllText($jeodeConfig, $text)
+    }
+    Say "Jeode will no longer ask whether to load the mod's native part each time the game starts."
+} catch {
+    Say "Note: couldn't update Jeode's settings ($($_.Exception.Message)). Jeode may ask 'Do you wish to load these native mods?' when the game starts; answer Yes." Yellow
+}
+
 # --- The mod -----------------------------------------------------------------
 $modDest = Join-Path $GamePath "mods\msm-a11y"
 Say ""

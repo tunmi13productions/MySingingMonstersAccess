@@ -25,9 +25,11 @@
 #include "minhook/include/MinHook.h"
 
 #include <windows.h>
+#include <winhttp.h>
 #include <process.h>
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 
 static const struct JeodeNativeAPI *g_api = NULL;
 
@@ -72,7 +74,10 @@ static int game_is_foreground(void)
    frame boundary. Nav handlers are silent when no real popup is open, so plain
    Tab/Enter during normal play are harmless no-ops. */
 enum { HK_HUD = 0, HK_NAV_NEXT, HK_NAV_PREV, HK_ACTIVATE, HK_MENU, HK_TUTORIAL, HK_TUTSTEP, HK_DUMP, HK_OBJECTS, HK_LEFT, HK_RIGHT, HK_UP, HK_DOWN, HK_WHATNOW, HK_ESCAPE, HK_BACKSPACE, HK_POI_PREV, HK_POI_NEXT, HK_SPOT_PREV, HK_SPOT_NEXT, HK_CAMERA, HK_HOME, HK_END, HK_LOOKS,
-       HK_P_HUD, HK_P_WHATNOW, HK_P_MENU, HK_P_OBJECTS, HK_P_LOOKS, HK_P_CAMERA, HK_P_TUTSTEP, HK_LETTERS, HK_XP, HK_P_XP, HK_ADJ_DOWN, HK_ADJ_UP, HK_ADJ_MIN, HK_ADJ_MAX, HK_ADVICE, HK_P_ADVICE, HK_COUNT };
+       HK_P_HUD, HK_P_WHATNOW, HK_P_MENU, HK_P_OBJECTS, HK_P_LOOKS, HK_P_CAMERA, HK_P_TUTSTEP, HK_LETTERS, HK_XP, HK_P_XP, HK_ADJ_DOWN, HK_ADJ_UP, HK_ADJ_MIN, HK_ADJ_MAX, HK_ADVICE, HK_P_ADVICE,
+       HK_NUM_INSTANT, HK_NUM1, HK_NUM2, HK_NUM3, HK_NUM4, HK_NUM5, HK_NUM6, HK_NUM7, HK_NUM8, HK_NUM9, HK_NUM0,
+       HK_SNUM1, HK_SNUM2, HK_SNUM3, HK_SNUM4, HK_SNUM5, HK_SNUM6, HK_SNUM7, HK_SNUM8, HK_SNUM9, HK_SNUM0,
+       HK_STEREO, HK_STEREO_DOWN, HK_STEREO_UP, HK_COUNT };
 
 static const char *const g_hkLua[HK_COUNT] = {
     /* HK_HUD (Ctrl+Shift+A) */
@@ -142,6 +147,27 @@ static const char *const g_hkLua[HK_COUNT] = {
     /* HK_ADVICE (Ctrl+Shift+F) / HK_P_ADVICE (F) -- advice for your island */
     "if type(a11y_advice)=='function' then a11y_advice() end",
     "if type(a11y_plainKey)=='function' then a11y_plainKey('advice') end",
+    /* HK_NUM_INSTANT (Ctrl+Shift+N) -- handled natively (settings_toggle_numbers) */
+    "",
+    /* HK_NUM1..HK_NUM0 -- handled natively (g_numLua: single or double press) */
+    "", "", "", "", "", "", "", "", "", "",
+    /* HK_SNUM1..HK_SNUM0 (Shift+1..Shift+0) -- items 11 to 20, the same way */
+    "", "", "", "", "", "", "", "", "", "",
+    /* HK_STEREO (Ctrl+Shift+S), HK_STEREO_DOWN/UP (Ctrl+Shift+Left/Right) --
+       stereo width, handled natively (pan_key) */
+    "", "", "",
+};
+
+/* Number keys 1..0: a11y_numKey(n, go). go = a second press of the same key
+   within NUM_DOUBLE_MS, or any press in instant mode. */
+#define NUM_DOUBLE_MS 500
+#define NUMKEY(n) { "if type(a11y_numKey)=='function' then a11y_numKey(" #n ",false) end", \
+                    "if type(a11y_numKey)=='function' then a11y_numKey(" #n ",true) end" }
+static const char *const g_numLua[20][2] = {
+    NUMKEY(1), NUMKEY(2), NUMKEY(3), NUMKEY(4), NUMKEY(5),
+    NUMKEY(6), NUMKEY(7), NUMKEY(8), NUMKEY(9), NUMKEY(10),
+    NUMKEY(11), NUMKEY(12), NUMKEY(13), NUMKEY(14), NUMKEY(15),
+    NUMKEY(16), NUMKEY(17), NUMKEY(18), NUMKEY(19), NUMKEY(20),
 };
 
 /* ---------------------------------------------------------------------------
@@ -150,6 +176,9 @@ static const char *const g_hkLua[HK_COUNT] = {
    plain-letter keys (A, W, M, O, I, C, T) on or off; Ctrl+Shift+L toggles it.
    --------------------------------------------------------------------------- */
 static volatile LONG g_lettersOn = 1;
+/* [keys] number_keys: 0 = press twice to act (default), 1 = one press acts, 2 = off. */
+static volatile LONG g_numMode = 0;
+static const char *const g_numModeName[3] = { "twice", "once", "off" };
 static char g_settingsPath[MAX_PATH] = "";
 
 static void settings_load(void)
@@ -164,7 +193,30 @@ static void settings_load(void)
     if (!slash || (size_t)(slash - g_settingsPath) + 14 >= MAX_PATH) { g_settingsPath[0] = 0; return; }
     strcpy(slash + 1, "settings.ini");
     InterlockedExchange(&g_lettersOn, GetPrivateProfileIntA("keys", "single_letters", 1, g_settingsPath) ? 1 : 0);
-    A11Y_Log("Settings: %s, single_letters=%ld", g_settingsPath, g_lettersOn);
+    {
+        char mode[16] = "";
+        LONG m = 0;
+        GetPrivateProfileStringA("keys", "number_keys", "twice", mode, sizeof mode, g_settingsPath);
+        if (_stricmp(mode, "once") == 0) m = 1;
+        else if (_stricmp(mode, "off") == 0) m = 2;
+        InterlockedExchange(&g_numMode, m);
+    }
+    A11Y_Log("Settings: %s, single_letters=%ld, number_keys=%s", g_settingsPath, g_lettersOn, g_numModeName[g_numMode]);
+}
+
+/* Ctrl+Shift+N: twice -> once -> off -> twice. */
+static void settings_toggle_numbers(void)
+{
+    static const char *const said[3] = {
+        "if type(a11y_speak)=='function' then a11y_speak('Number keys: press once to hear, twice to act',true) end",
+        "if type(a11y_speak)=='function' then a11y_speak('Number keys: one press acts',true) end",
+        "if type(a11y_speak)=='function' then a11y_speak('Number keys off',true) end",
+    };
+    LONG m = (g_numMode + 1) % 3;
+    InterlockedExchange(&g_numMode, m);
+    if (g_settingsPath[0])
+        WritePrivateProfileStringA("keys", "number_keys", g_numModeName[m], g_settingsPath);
+    if (g_api && g_api->is_lua_ready()) g_api->queue_lua(said[m], "=a11y_hotkey");
 }
 
 static void settings_toggle_letters(void)
@@ -179,12 +231,349 @@ static void settings_toggle_letters(void)
             "=a11y_hotkey");
 }
 
+/* ---------------------------------------------------------------------------
+   Update check: once per launch, on its own thread, ask GitHub for the newest
+   release (the same list update.bat reads) and compare it with the version in
+   manifest.json next to this DLL. If it's newer, a11y_update_version() returns
+   it and init.lua announces it once the island is up. The game folder's
+   winhttp.dll is Jeode's proxy (and WinINet, which leans on WinHTTP, fails
+   inside the game with error 127), so this loads the real WinHTTP from the
+   system folder by full path and calls it directly. Off with [update] check=0 in
+   settings.ini; skipped for the development version (0.1.0). Any failure is
+   silent.
+   --------------------------------------------------------------------------- */
+static char g_updateVer[64] = "";
+
+static int mod_file(const char *name, char *out, size_t cap)
+{
+    HMODULE self = NULL;
+    char *slash;
+    if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            (LPCSTR)&mod_file, &self)) return 0;
+    if (!GetModuleFileNameA(self, out, (DWORD)cap)) return 0;
+    slash = strrchr(out, '\\');
+    if (!slash || (size_t)(slash - out) + strlen(name) + 2 >= cap) return 0;
+    strcpy(slash + 1, name);
+    return 1;
+}
+
+/* The string value after "key" in a JSON text, into out (safe characters only). */
+static int json_string(const char *text, const char *key, char *out, size_t cap)
+{
+    const char *p = strstr(text, key);
+    size_t n = 0;
+    if (!p) return 0;
+    p += strlen(key);
+    while (*p == ' ' || *p == ':' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+    if (*p != '"') return 0;
+    p++;
+    while (*p && *p != '"' && n + 1 < cap) {
+        char c = *p++;
+        if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '.' || c == '-')
+            out[n++] = c;
+    }
+    out[n] = 0;
+    return n > 0;
+}
+
+/* Compare dotted numbers ("v0.1.14-alpha" vs "0.1.13-alpha"): >0 if a is newer. */
+static int version_cmp(const char *a, const char *b)
+{
+    int i;
+    char *end;
+    if (*a == 'v' || *a == 'V') a++;
+    if (*b == 'v' || *b == 'V') b++;
+    for (i = 0; i < 4; i++) {
+        long x = strtol(a, &end, 10); a = end;
+        {
+            long y = strtol(b, &end, 10); b = end;
+            if (x != y) return x > y ? 1 : -1;
+        }
+        if (*a == '.') a++; else a = "";
+        if (*b == '.') b++; else b = "";
+    }
+    return 0;
+}
+
+static unsigned __stdcall UpdateProc(void *param)
+{
+    char path[MAX_PATH], local[64] = "", remote[64] = "";
+    char *buf = NULL;
+    DWORD got = 0, n = 0, timeout = 15000;
+    HINTERNET net = NULL, req = NULL;
+    HANDLE f;
+    (void)param;
+
+    if (mod_file("settings.ini", path, sizeof path) && !GetPrivateProfileIntA("update", "check", 1, path)) {
+        A11Y_Log("Update check: off in settings.ini");
+        return 0;
+    }
+    A11Y_Log("Update check: starting");
+    if (!mod_file("manifest.json", path, sizeof path)) { A11Y_Log("Update check: no mod folder"); return 0; }
+    f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (f == INVALID_HANDLE_VALUE) { A11Y_Log("Update check: can't open %s (%lu)", path, GetLastError()); return 0; }
+    buf = (char *)malloc(8193);
+    if (buf && ReadFile(f, buf, 8192, &got, NULL)) { buf[got] = 0; json_string(buf, "\"version\"", local, sizeof local); }
+    CloseHandle(f);
+    free(buf); buf = NULL;
+    if (!local[0] || strcmp(local, "0.1.0") == 0) {
+        A11Y_Log("Update check: skipped (version '%s')", local);
+        return 0;
+    }
+
+    A11Y_Log("Update check: installed %s, asking GitHub", local);
+    {
+        typedef HINTERNET (WINAPI *Open_t)(LPCWSTR, DWORD, LPCWSTR, LPCWSTR, DWORD);
+        typedef HINTERNET (WINAPI *Connect_t)(HINTERNET, LPCWSTR, INTERNET_PORT, DWORD);
+        typedef HINTERNET (WINAPI *Request_t)(HINTERNET, LPCWSTR, LPCWSTR, LPCWSTR, LPCWSTR, LPCWSTR *, DWORD);
+        typedef BOOL (WINAPI *Send_t)(HINTERNET, LPCWSTR, DWORD, LPVOID, DWORD, DWORD, DWORD_PTR);
+        typedef BOOL (WINAPI *Receive_t)(HINTERNET, LPVOID);
+        typedef BOOL (WINAPI *Read_t)(HINTERNET, LPVOID, DWORD, LPDWORD);
+        typedef BOOL (WINAPI *Close_t)(HINTERNET);
+        typedef BOOL (WINAPI *Timeouts_t)(HINTERNET, int, int, int, int);
+        char sys[MAX_PATH];
+        HMODULE wh = NULL;
+        Open_t pOpen; Connect_t pConnect; Request_t pRequest; Send_t pSend;
+        Receive_t pReceive; Read_t pRead; Close_t pClose; Timeouts_t pTimeouts;
+        HINTERNET con = NULL;
+        UINT len = GetSystemDirectoryA(sys, MAX_PATH - 16);
+        if (len && len < MAX_PATH - 16) { strcpy(sys + len, "\\winhttp.dll"); wh = LoadLibraryA(sys); }
+        if (!wh) { A11Y_Log("Update check: can't load system WinHTTP (%lu)", GetLastError()); return 0; }
+        pOpen = (Open_t)GetProcAddress(wh, "WinHttpOpen");
+        pConnect = (Connect_t)GetProcAddress(wh, "WinHttpConnect");
+        pRequest = (Request_t)GetProcAddress(wh, "WinHttpOpenRequest");
+        pSend = (Send_t)GetProcAddress(wh, "WinHttpSendRequest");
+        pReceive = (Receive_t)GetProcAddress(wh, "WinHttpReceiveResponse");
+        pRead = (Read_t)GetProcAddress(wh, "WinHttpReadData");
+        pClose = (Close_t)GetProcAddress(wh, "WinHttpCloseHandle");
+        pTimeouts = (Timeouts_t)GetProcAddress(wh, "WinHttpSetTimeouts");
+        if (!pOpen || !pConnect || !pRequest || !pSend || !pReceive || !pRead || !pClose || !pTimeouts) {
+            A11Y_Log("Update check: system WinHTTP is missing functions");
+            return 0;
+        }
+        net = pOpen(L"MySingingMonstersAccess-update-check", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+                    WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+        if (!net) net = pOpen(L"MySingingMonstersAccess-update-check", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                              WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+        if (!net) { A11Y_Log("Update check: WinHttpOpen failed (%lu)", GetLastError()); return 0; }
+        pTimeouts(net, (int)timeout, (int)timeout, (int)timeout, (int)timeout);
+        con = pConnect(net, L"api.github.com", INTERNET_DEFAULT_HTTPS_PORT, 0);
+        if (con) req = pRequest(con, L"GET", L"/repos/tunmi13productions/MySingingMonstersAccess/releases?per_page=1",
+                                NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
+        if (req && pSend(req, L"Accept: application/vnd.github+json\r\n", (DWORD)-1, WINHTTP_NO_REQUEST_DATA, 0, 0, 0)
+                && pReceive(req, NULL)) {
+            /* tag_name sits near the top of the first release; 64 KB is plenty. */
+            buf = (char *)malloc(65537);
+            got = 0;
+            while (buf && got < 65536 && pRead(req, buf + got, 65536 - got, &n) && n > 0) got += n;
+            if (buf) { buf[got] = 0; json_string(buf, "\"tag_name\"", remote, sizeof remote); }
+            free(buf);
+            A11Y_Log("Update check: read %lu bytes", got);
+        } else {
+            A11Y_Log("Update check: request failed (%lu)", GetLastError());
+        }
+        if (req) pClose(req);
+        if (con) pClose(con);
+        pClose(net);
+    }
+
+    if (!remote[0]) { A11Y_Log("Update check: no answer from GitHub"); return 0; }
+    A11Y_Log("Update check: installed %s, newest %s", local, remote);
+    if (version_cmp(remote, local) > 0) {
+        const char *v = (remote[0] == 'v' || remote[0] == 'V') ? remote + 1 : remote;
+        lstrcpynA(g_updateVer, v, sizeof g_updateVer);
+    }
+    return 0;
+}
+
+static int JEODE_CALL j_a11y_update_version(void *L)
+{
+    lua_State *ls = (lua_State *)L;
+    if (g_updateVer[0]) lua_pushstring(ls, g_updateVer); else lua_pushnil(ls);
+    return 1;
+}
+
+/* ---------------------------------------------------------------------------
+   Wider stereo for monsters (game 5.7.4). The game mixes in software; each
+   sys::sound::software::SoundChannelSoftware pans itself in its setPosition
+   (vftable slot +8, RVA 0x226b60, __thiscall(float x, float y, float z)),
+   with two "ears" 0.075 units apart, heard from the camera (the SoundEngine
+   singleton, RVA 0x14f71bc: listener +0x78/+0x7c/+0x80, units +0x84). The
+   camera sits about 3 units above the island, so every monster lands near
+   the middle. After the game's own setPosition, keep its loudness (the mean
+   of its left and right gains, +0x58/+0x5c) and re-pan it, equal power, by
+   the monster's left/right offset from the camera centre:
+   pan = clamp(dx * strength / 1.5, -1, 1); zoomed out, monsters sit about
+   0.6 units left to 0.9 units right of the camera centre. Then redo the fixed-point gains the
+   mixer uses (+0x30/+0x34 = volume +0x54 * gain * 65536).
+   [audio] pan_strength in settings.ini, re-read every 10 s (default 1):
+   0 = the game's own panning, 1 = full left/right 1.5 units out.
+   Ctrl+Shift+S cycles presets, Ctrl+Shift+Left/Right step by 0.25.
+   Installed only if the vftable slot points at the expected code.
+   --------------------------------------------------------------------------- */
+#define AUD_ENGINE_RVA_574      0x14f71bcu
+#define AUD_CHANSOFT_VT_RVA_574 0xd7a070u
+#define AUD_SETPOS_RVA_574      0x226b60u
+
+typedef void (__fastcall *chan_setpos_t)(void *self, void *edx, float x, float y, float z);
+static chan_setpos_t g_chanSetPos = NULL;
+static volatile LONG g_panStrengthX100 = 0;      /* pan_strength * 100 */
+static uintptr_t g_exeBase = 0;
+static struct {
+    CRITICAL_SECTION cs;
+    long calls, panned;
+    float dxMin, dxMax;
+    int samples;
+    struct { float x, y, z, dx, gl, gr, nl, nr; } s[6];
+} g_pan;
+
+/* Hundredths, for logging (A11Y_Log can't print %f). */
+static long h(float v) { return (long)(v * 100.0f + (v < 0 ? -0.5f : 0.5f)); }
+
+static void __fastcall hk_chan_setpos(void *self, void *edx, float x, float y, float z)
+{
+    char *c = (char *)self;
+    char *eng;
+    float strength, units, dx, gl, gr, m, pan, th, nl, nr, vol;
+    g_chanSetPos(self, edx, x, y, z);
+    InterlockedIncrement(&g_pan.calls);
+    strength = g_panStrengthX100 / 100.0f;
+    eng = *(char **)(g_exeBase + AUD_ENGINE_RVA_574);
+    if (!eng) return;
+    units = *(float *)(eng + 0x84);
+    if (units <= 0.0f) return;
+    dx = (x - *(float *)(eng + 0x78)) / units;
+    gl = *(float *)(c + 0x58);
+    gr = *(float *)(c + 0x5c);
+    nl = gl; nr = gr;
+    if (strength > 0.0f) {
+        HANDLE mx = *(HANDLE *)(c + 0x10);
+        m = (gl + gr) * 0.5f;
+        pan = dx * strength / 1.5f;
+        if (pan < -1.0f) pan = -1.0f;
+        if (pan > 1.0f) pan = 1.0f;
+        th = (pan + 1.0f) * 0.78539816f;            /* 0 .. pi/2 */
+        nl = m * 1.41421356f * (float)cos(th);
+        nr = m * 1.41421356f * (float)sin(th);
+        WaitForSingleObject(mx, INFINITE);
+        vol = *(float *)(c + 0x54);
+        *(float *)(c + 0x58) = nl;
+        *(float *)(c + 0x5c) = nr;
+        *(int *)(c + 0x30) = (int)(vol * nl * 65536.0f);
+        *(int *)(c + 0x34) = (int)(vol * nr * 65536.0f);
+        ReleaseMutex(mx);
+        InterlockedIncrement(&g_pan.panned);
+    }
+    EnterCriticalSection(&g_pan.cs);
+    if (dx < g_pan.dxMin) g_pan.dxMin = dx;
+    if (dx > g_pan.dxMax) g_pan.dxMax = dx;
+    if (g_pan.samples < 6) {
+        int k = g_pan.samples++;
+        g_pan.s[k].x = x; g_pan.s[k].y = y; g_pan.s[k].z = z; g_pan.s[k].dx = dx;
+        g_pan.s[k].gl = gl; g_pan.s[k].gr = gr; g_pan.s[k].nl = nl; g_pan.s[k].nr = nr;
+    }
+    LeaveCriticalSection(&g_pan.cs);
+}
+
+static void pan_read_setting(void)
+{
+    char path[MAX_PATH], buf[32] = "";
+    float v = 0.0f;
+    if (mod_file("settings.ini", path, sizeof path)) {
+        GetPrivateProfileStringA("audio", "pan_strength", "1", buf, sizeof buf, path);
+        v = (float)atof(buf);
+    }
+    if (v < 0.0f) v = 0.0f;
+    if (v > 10.0f) v = 10.0f;
+    InterlockedExchange(&g_panStrengthX100, (LONG)(v * 100.0f + 0.5f));
+}
+
+static void install_pan_hook(void)
+{
+    uintptr_t base = (uintptr_t)GetModuleHandleA(NULL);
+    static const unsigned char PROLOGUE[] = { 0x55,0x8B,0xEC,0x56,0x8B,0xF1,0x6A,0xFF,0xFF,0x76,0x10,0xFF,0x15 };
+    void **vt = (void **)(base + AUD_CHANSOFT_VT_RVA_574);
+    void *fn = (void *)(base + AUD_SETPOS_RVA_574);
+    MH_STATUS st;
+    g_exeBase = base;
+    if (IsBadReadPtr(vt, 12) || vt[2] != fn) { A11Y_Log("pan hook: channel vftable not as in 5.7.4, not installing"); return; }
+    if (memcmp(fn, PROLOGUE, sizeof PROLOGUE) != 0) { A11Y_Log("pan hook: setPosition code differs, not installing"); return; }
+    InitializeCriticalSection(&g_pan.cs);
+    g_pan.dxMin = 1e9f; g_pan.dxMax = -1e9f;
+    pan_read_setting();
+    st = MH_Initialize();
+    if (st != MH_OK && st != MH_ERROR_ALREADY_INITIALIZED) { A11Y_Log("pan hook: MH_Initialize %d", st); return; }
+    st = MH_CreateHook(fn, (LPVOID)hk_chan_setpos, (LPVOID *)&g_chanSetPos);
+    if (st == MH_OK) st = MH_EnableHook(fn);
+    if (st != MH_OK) { A11Y_Log("pan hook: hooking failed (%d)", st); return; }
+    A11Y_Log("pan hook installed, pan_strength %ld/100", g_panStrengthX100);
+}
+
+/* Stereo width keys. which: 0 = next preset, -1 / 1 = step. Says and saves it. */
+static void pan_key(int which)
+{
+    static const int presets[5] = { 0, 50, 100, 200, 300 };
+    static const char *const names[5] = { "the game's own", "gentle", "normal", "wide", "widest" };
+    char path[MAX_PATH], val[16], msg[96];
+    LONG cur = g_panStrengthX100, v;
+    int i;
+    const char *name = NULL;
+    if (!g_chanSetPos) { A11Y_Speak("Stereo width isn't available in this game version", 1); return; }
+    if (which == 0) {
+        v = presets[0];
+        for (i = 0; i < 5; i++) if (presets[i] > cur) { v = presets[i]; break; }
+    } else {
+        v = cur + which * 25;
+        if (v < 0) v = 0;
+        if (v > 500) v = 500;
+    }
+    InterlockedExchange(&g_panStrengthX100, v);
+    wsprintfA(val, "%ld.%02ld", v / 100, v % 100);
+    if (mod_file("settings.ini", path, sizeof path))
+        WritePrivateProfileStringA("audio", "pan_strength", val, path);
+    for (i = 0; i < 5; i++) if (presets[i] == v) name = names[i];
+    if (which == 0 || name) {
+        wsprintfA(msg, "Stereo: %s", name ? name : val);
+        if (which != 0) wsprintfA(msg, "Stereo width %ld.%02ld, %s", v / 100, v % 100, name);
+    } else {
+        wsprintfA(msg, "Stereo width %ld.%02ld", v / 100, v % 100);
+    }
+    A11Y_Speak(msg, 1);
+}
+
+/* Called from the hotkey thread every 10 s: re-read the setting, log. */
+static void audio_log_summary(void)
+{
+    char *eng;
+    int i;
+    LONG before = g_panStrengthX100;
+    if (!g_chanSetPos) return;
+    pan_read_setting();
+    if (g_panStrengthX100 != before) A11Y_Log("pan: pan_strength now %ld/100", g_panStrengthX100);
+    eng = *(char **)(g_exeBase + AUD_ENGINE_RVA_574);
+    EnterCriticalSection(&g_pan.cs);
+    if (eng && !IsBadReadPtr(eng + 0x78, 16))
+        A11Y_Log("pan: listener (%ld, %ld, %ld), units %ld; %ld position calls, %ld re-panned; offsets %ld to %ld [hundredths]",
+                 h(*(float *)(eng + 0x78)), h(*(float *)(eng + 0x7c)), h(*(float *)(eng + 0x80)), h(*(float *)(eng + 0x84)),
+                 g_pan.calls, g_pan.panned, g_pan.samples ? h(g_pan.dxMin) : 0, g_pan.samples ? h(g_pan.dxMax) : 0);
+    for (i = 0; i < g_pan.samples; i++)
+        A11Y_Log("pan:   at (%ld, %ld, %ld) offset %ld, game left %ld right %ld, now left %ld right %ld",
+                 h(g_pan.s[i].x), h(g_pan.s[i].y), h(g_pan.s[i].z), h(g_pan.s[i].dx),
+                 h(g_pan.s[i].gl), h(g_pan.s[i].gr), h(g_pan.s[i].nl), h(g_pan.s[i].nr));
+    g_pan.samples = 0; g_pan.calls = 0; g_pan.panned = 0;
+    g_pan.dxMin = 1e9f; g_pan.dxMax = -1e9f;
+    LeaveCriticalSection(&g_pan.cs);
+}
+
 static unsigned __stdcall HotkeyProc(void *param)
 {
     int   prev[HK_COUNT];
     DWORD last[HK_COUNT];
     DWORD since[HK_COUNT];
     int   i;
+    int   numLast = -1;                 /* last number key pressed, for double presses */
+    DWORD numAt = 0;
+    DWORD audAt = GetTickCount();       /* audio summary every 10 s */
     (void)param;
 
     for (i = 0; i < HK_COUNT; i++) { prev[i] = 0; last[i] = 0; since[i] = 0; }
@@ -234,6 +623,22 @@ static unsigned __stdcall HotkeyProc(void *param)
             down[HK_P_TUTSTEP] = plain && KEY_DOWN('T');
             down[HK_P_XP]      = plain && KEY_DOWN('X');
         }
+        {
+            /* Number keys: their own switch, not the single-letter one (init.lua
+               still ignores them while a text box is open). */
+            int on = !ctrl && !KEY_DOWN(VK_MENU) && g_numMode != 2;
+            int k;
+            for (k = 0; k < 9; k++) {
+                down[HK_NUM1 + k]  = on && !shift && KEY_DOWN('1' + k);
+                down[HK_SNUM1 + k] = on && shift && KEY_DOWN('1' + k);
+            }
+            down[HK_NUM0]  = on && !shift && KEY_DOWN('0');
+            down[HK_SNUM0] = on && shift && KEY_DOWN('0');
+        }
+        down[HK_NUM_INSTANT] = ctrl && shift && KEY_DOWN('N');
+        down[HK_STEREO]      = ctrl && shift && KEY_DOWN('S');
+        down[HK_STEREO_DOWN] = ctrl && shift && KEY_DOWN(VK_LEFT);
+        down[HK_STEREO_UP]   = ctrl && shift && KEY_DOWN(VK_RIGHT);
         down[HK_LETTERS]   = ctrl && shift && KEY_DOWN('L');
         down[HK_XP]        = ctrl && shift && KEY_DOWN('X');
         down[HK_ADJ_DOWN]  = shift && !ctrl && KEY_DOWN(VK_OEM_COMMA);
@@ -249,7 +654,8 @@ static unsigned __stdcall HotkeyProc(void *param)
                (the old drag fallback refuses a drag while one is running). */
             int moving = i == HK_NAV_NEXT || i == HK_NAV_PREV || i == HK_HOME || i == HK_END
                 || i == HK_SPOT_PREV || i == HK_SPOT_NEXT || i == HK_POI_PREV || i == HK_POI_NEXT
-                || i == HK_LEFT || i == HK_RIGHT || i == HK_UP || i == HK_DOWN;
+                || i == HK_LEFT || i == HK_RIGHT || i == HK_UP || i == HK_DOWN
+                || (i >= HK_NUM1 && i <= HK_SNUM0);
             int repeats = i == HK_NAV_NEXT || i == HK_NAV_PREV || i == HK_SPOT_PREV || i == HK_SPOT_NEXT
                 || i == HK_ADJ_DOWN || i == HK_ADJ_UP
                 || i == HK_LEFT || i == HK_RIGHT || i == HK_UP || i == HK_DOWN;
@@ -266,6 +672,19 @@ static unsigned __stdcall HotkeyProc(void *param)
                 last[i] = now;
                 if (i == HK_LETTERS) {
                     if (game_is_foreground()) settings_toggle_letters();
+                } else if (i == HK_NUM_INSTANT) {
+                    if (game_is_foreground()) settings_toggle_numbers();
+                } else if (i == HK_STEREO || i == HK_STEREO_DOWN || i == HK_STEREO_UP) {
+                    if (game_is_foreground()) pan_key(i == HK_STEREO ? 0 : (i == HK_STEREO_UP ? 1 : -1));
+                } else if (i >= HK_NUM1 && i <= HK_SNUM0) {
+                    if (game_is_foreground() && g_api && g_api->is_lua_ready()) {
+                        int k = i - HK_NUM1;
+                        int go = g_numMode == 1 || (numLast == k && now - numAt <= NUM_DOUBLE_MS);
+                        /* After a double press, the next press starts over. */
+                        numLast = go ? -1 : k;
+                        numAt = now;
+                        g_api->queue_lua(g_numLua[k][go ? 1 : 0], "=a11y_hotkey");
+                    }
                 } else if (game_is_foreground() && g_api && g_api->is_lua_ready()) {
                     if (i == HK_HUD) A11Y_Log("Ctrl+Shift+A -> HUD announce");
                     if (i == HK_NAV_NEXT || i == HK_NAV_PREV) A11Y_Log("[timing] Tab key seen");
@@ -274,6 +693,7 @@ static unsigned __stdcall HotkeyProc(void *param)
             }
             prev[i] = down[i];
         }
+        if (GetTickCount() - audAt >= 10000) { audAt = GetTickCount(); audio_log_summary(); }
         Sleep(HOTKEY_POLL_MS);
     }
 
@@ -1139,7 +1559,9 @@ JEODE_EXPORT int JEODE_CALL jeode_native_init(const struct JeodeNativeAPI *api)
     api->register_global("a11y_entity_tile", j_a11y_entity_tile);
     api->register_global("a11y_move_tile", j_a11y_move_tile);
     api->register_global("a11y_set_move_tile", j_a11y_set_move_tile);
+    api->register_global("a11y_update_version", j_a11y_update_version);
     install_tutorial_popup_hook();
+    install_pan_hook();
     resolve_tile_getters();
     resolve_move_tile();
     api->log("msm-a11y", "registered a11y_* globals");
@@ -1160,6 +1582,12 @@ JEODE_EXPORT int JEODE_CALL jeode_native_init(const struct JeodeNativeAPI *api)
     } else {
         InterlockedExchange(&g_hotkeyRunning, 0);
         api->log("msm-a11y", "failed to start HUD hotkey thread");
+    }
+
+    /* Update check, in the background; the thread ends on its own. */
+    {
+        HANDLE t = (HANDLE)_beginthreadex(NULL, 0, UpdateProc, NULL, 0, NULL);
+        if (t) CloseHandle(t);
     }
 
     /* Speaks immediately via Prism, no Lua needed - our "we're alive" signal. */

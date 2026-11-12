@@ -76,11 +76,11 @@ if errorlevel 1 (
 )
 
 echo === Copying Prism (32-bit prism.dll) into mod folder ===
-REM  Built by scripts\Build-Prism.bat into native\prism\.
-if exist "%NATIVE%\prism\prism.dll" (
-    copy /Y "%NATIVE%\prism\prism.dll" "%MODDIR%\" >nul
+REM  Built by scripts\Build-Prism.bat into native\prism\.
+if exist "%NATIVE%\prism\prism.dll" (
+    copy /Y "%NATIVE%\prism\prism.dll" "%MODDIR%\" >nul
 ) else (
-    echo WARNING: native\prism\prism.dll not found. Run scripts\Build-Prism.bat first,
+    echo WARNING: native\prism\prism.dll not found. Run scripts\Build-Prism.bat first,
     echo          or the mod will load but stay silent.
 )
 REM  Tolk and its reader clients are no longer used.

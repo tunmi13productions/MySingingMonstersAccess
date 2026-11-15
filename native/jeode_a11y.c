@@ -77,7 +77,7 @@ enum { HK_HUD = 0, HK_NAV_NEXT, HK_NAV_PREV, HK_ACTIVATE, HK_MENU, HK_TUTORIAL, 
        HK_P_HUD, HK_P_WHATNOW, HK_P_MENU, HK_P_OBJECTS, HK_P_LOOKS, HK_P_CAMERA, HK_P_TUTSTEP, HK_LETTERS, HK_XP, HK_P_XP, HK_ADJ_DOWN, HK_ADJ_UP, HK_ADJ_MIN, HK_ADJ_MAX, HK_ADVICE, HK_P_ADVICE,
        HK_NUM_INSTANT, HK_NUM1, HK_NUM2, HK_NUM3, HK_NUM4, HK_NUM5, HK_NUM6, HK_NUM7, HK_NUM8, HK_NUM9, HK_NUM0,
        HK_SNUM1, HK_SNUM2, HK_SNUM3, HK_SNUM4, HK_SNUM5, HK_SNUM6, HK_SNUM7, HK_SNUM8, HK_SNUM9, HK_SNUM0,
-       HK_STEREO, HK_STEREO_DOWN, HK_STEREO_UP, HK_COUNT };
+       HK_STEREO, HK_STEREO_DOWN, HK_STEREO_UP, HK_DESCRIBE, HK_P_DESCRIBE, HK_COUNT };
 
 static const char *const g_hkLua[HK_COUNT] = {
     /* HK_HUD (Ctrl+Shift+A) */
@@ -156,6 +156,9 @@ static const char *const g_hkLua[HK_COUNT] = {
     /* HK_STEREO (Ctrl+Shift+S), HK_STEREO_DOWN/UP (Ctrl+Shift+Left/Right) --
        stereo width, handled natively (pan_key) */
     "", "", "",
+    /* HK_DESCRIBE (Ctrl+Shift+V) / HK_P_DESCRIBE (V) -- describe the island */
+    "if type(a11y_describe)=='function' then a11y_describe() end",
+    "if type(a11y_plainKey)=='function' then a11y_plainKey('describe') end",
 };
 
 /* Number keys 1..0: a11y_numKey(n, go). go = a second press of the same key
@@ -616,6 +619,7 @@ static unsigned __stdcall HotkeyProc(void *param)
             down[HK_P_HUD]     = plain && KEY_DOWN('A');
             down[HK_P_WHATNOW] = plain && KEY_DOWN('W');
             down[HK_P_ADVICE]  = plain && KEY_DOWN('F');
+            down[HK_P_DESCRIBE] = plain && KEY_DOWN('V');
             down[HK_P_MENU]    = plain && KEY_DOWN('M');
             down[HK_P_OBJECTS] = plain && KEY_DOWN('O');
             down[HK_P_LOOKS]   = plain && KEY_DOWN('I');
@@ -645,6 +649,7 @@ static unsigned __stdcall HotkeyProc(void *param)
         down[HK_ADJ_UP]    = shift && !ctrl && KEY_DOWN(VK_OEM_PERIOD);
         down[HK_ADJ_MIN]   = shift && !ctrl && KEY_DOWN(VK_HOME);
         down[HK_ADVICE]    = ctrl && shift && KEY_DOWN('F');
+        down[HK_DESCRIBE]  = ctrl && shift && KEY_DOWN('V');
         down[HK_ADJ_MAX]   = shift && !ctrl && KEY_DOWN(VK_END);
 
         for (i = 0; i < HK_COUNT; i++) {

@@ -1328,8 +1328,10 @@ local function collectControls(root, out, depth, group)
                     local prize = FRIENDLY.__spinPrize()
                     if prize then lbl = lbl .. ", " .. prize end
                 end
-                if lbl and cname and cname:find("^storeItem%d+$") and FRIENDLY.__storePrice then
-                    pcall(function() lbl = FRIENDLY.__storePrice(child, lbl) end)
+                if lbl and cname and (cname:find("^storeItem%d+$") or FRIENDLY.__exchangeItems[cname]) and FRIENDLY.__storePrice then
+                    pcall(function()
+                        lbl = FRIENDLY.__storeCurrencyLabel(child, cname) or FRIENDLY.__storePrice(child, lbl)
+                    end)
                 end
                 -- MEMORY on the Castle: the game marks a free game with "!"
                 -- (template_flipindicator, game.showFreeFlipIndicator).
@@ -2442,6 +2444,7 @@ end
 -- the currency icon (StoreItem.lua picks it by currency type). Sale items
 -- show saleTag's SaleAmount / OriginalAmount with their own CurrencySprite.
 FRIENDLY.__currencyWords = {
+    { "clubbox", "Clubbox Tokens" }, { "mini_game", "Minigame Tokens" }, { "minigame", "Minigame Tokens" },
     { "diamond", "Diamonds" }, { "coin", "Coins" }, { "relic", "Relics" }, { "shard", "Shards" },
     { "eth", "Shards" }, { "starpower", "Starpower" }, { "medal", "Medals" }, { "wildcard", "Egg Wildcards" },
     { "key", "Keys" }, { "food", "Food" }, { "treat", "Food" }, { "star", "Starpower" },
@@ -2489,6 +2492,55 @@ function FRIENDLY.__storePrice(item, lbl)
     local any = findNamed(item, "AnyCost", 1)
     addWord(any, any)
     return lbl
+end
+
+-- Packs items (template_storecurrencyitem.xml, StoreCurrencyItem.lua): the
+-- amount is CurrencyAmount, whose Sprite is the currency's icon; real-money
+-- items show IAPCost, a bonus shows saleTag ('+50%', SaleCurrencyAmount,
+-- OriginalCurrencyAmount). The exchange items pay in AnyCost instead; the
+-- relic one's price goes up and ExchangeRateResetText says when it resets.
+-- Returns nil for anything else (bundles keep their plain label).
+FRIENDLY.__exchangeItems = { currencyExchange = true, coinsToEthCurrencyExchange = true,
+    diamondsToEthCurrencyExchange = true, ethToDiamondsCurrencyExchange = true,
+    diamondsToRelicsCurrencyExchange = true }
+function FRIENDLY.__unit(amt, word)
+    if amt == "1" and word:sub(-1) == "s" then return word:sub(1, -2) end
+    return word
+end
+function FRIENDLY.__storeCurrencyLabel(item, name)
+    local amtEl = findNamed(item, "CurrencyAmount", 1)
+    local iap = findNamed(item, "IAPCost", 1)
+    local exchange = FRIENDLY.__exchangeItems[name]
+    if not amtEl or not (iap or exchange) then return nil end
+    local amt = elementText(amtEl)
+    local sale = findNamed(item, "saleTag", 1)
+    local extra, was = nil, nil
+    if sale and isVisible(sale) then
+        amt = elementText(findNamed(sale, "SaleCurrencyAmount", 1)) or amt
+        was = elementText(findNamed(sale, "OriginalCurrencyAmount", 1))
+        local pct = elementText(sale)
+        if pct then extra = pct:gsub("^%+", "") .. " extra" end
+    end
+    if not amt or not amt:find("^[%d,]+$") then return nil end
+    local cur = FRIENDLY.__currencyOf(amtEl)
+    local parts = { amt .. (cur and (" " .. FRIENDLY.__unit(amt, cur)) or "") }
+    if exchange then
+        local any = findNamed(item, "AnyCost", 1)
+        local cost = any and elementText(any)
+        if cost then
+            local cc = FRIENDLY.__currencyOf(any)
+            parts[1] = parts[1] .. " for " .. cost .. (cc and (" " .. FRIENDLY.__unit(cost, cc)) or "")
+        end
+        local rr = findNamed(item, "ExchangeRateResetText", 1)
+        local reset = rr and isVisible(rr) and elementText(rr)
+        if reset then parts[#parts + 1] = reset end
+    else
+        local price = iap and elementText(iap)
+        if price then parts[#parts + 1] = price end
+    end
+    if extra then parts[#parts + 1] = extra end
+    if was then parts[#parts + 1] = "was " .. was end
+    return table.concat(parts, ", ")
 end
 
 -- What a monster looks like (Control+Shift+I with a monster selected).
@@ -3293,34 +3345,90 @@ POPUP_READERS.popup_breed_egg = POPUP_READERS.__eggResult
 FRIENDLY.__flip = { seen = {}, pending = nil }
 FRIENDLY.__flip.CURRENCY = { coin = "Coins", coins = "Coins", diamond = "Diamonds", diamonds = "Diamonds",
     food = "Food", xp = "XP", key = "Keys", keys = "Keys", shard = "Shards", relic = "Relics", star = "Starpower" }
--- Monster portraits are named by code (monster_portrait_square_q05_rare):
--- game.getPortraitName(monsterId) gives that code, so map it back once.
+-- Monster portraits are named by element letters (monster_portrait_square_
+-- de, _e_rare, _abc_epic; Dipsters q01-q07). game.getPortraitName's
+-- numbering gives other monsters' pictures, so build the codes from each
+-- monster's genes (game.monsterTypeGenes, as the appearance key does).
+FRIENDLY.__flip.DIPSTERS = { "Do", "Re", "Mi", "Fa", "Sol", "La", "Ti" }
 function FRIENDLY.__flip.portraitName(code)
+    local short = code:gsub("^monster_portrait_square_", ""):gsub("^monster_portrait_", "")
+    local q, qr = short:match("^q0(%d)(.*)$")
+    if q and FRIENDLY.__flip.DIPSTERS[tonumber(q)] then
+        local r = qr:find("rare") and "Rare " or (qr:find("epic") and "Epic " or "")
+        return r .. FRIENDLY.__flip.DIPSTERS[tonumber(q)] .. " Dipster"
+    end
     local map = FRIENDLY.__flip.portraits
     if not map then
         map = {}
         local misses = 0
+        -- Also each id's getPortraitName code and gene key, to find how far
+        -- getPortraitName's numbering is shifted (for VOC_01 and other
+        -- pictures not named by element letters).
+        local pcode, gkey, names = {}, {}, {}
+        local function short(v)
+            v = v and tostring(v):match("([^/]+)$") or nil
+            return v and v:gsub("%.%w+$", ""):gsub("^monster_portrait_square_", ""):gsub("^monster_portrait_", "") or nil
+        end
         for id = 1, 3000 do
-            -- Only ask for portraits of ids that are real monsters.
-            local pn, nm = nil, nil
+            local nm, genes = nil, nil
             pcall(function() nm = cleanText(LOC(game.getMonsterData(id):name())) end)
-            if nm and nm ~= "" then pcall(function() pn = game.getPortraitName(id) end) end
+            pcall(function() pcode[id] = short(game.getPortraitName(id)) end)
             if nm and nm ~= "" then
                 misses = 0
-                if pn and pn ~= "" then
-                    pn = tostring(pn):match("([^/]+)$"):gsub("%.%w+$", "")
-                    if not map[pn] then map[pn] = FRIENDLY.__withRarity(nm, id) end
+                names[id] = FRIENDLY.__withRarity(nm, id)
+                pcall(function() genes = tostring(game.monsterTypeGenes(id)) end)
+                local base = genes and genes:lower():gsub("[^a-g]", "") or ""
+                if base ~= "" then
+                    local letters = {}
+                    for ch in base:gmatch(".") do letters[#letters + 1] = ch end
+                    table.sort(letters)
+                    local key = table.concat(letters)
+                    local rare, epic = false, false
+                    pcall(function() rare = game.isRare(id) and true or false end)
+                    pcall(function() epic = game.isEpic(id) and true or false end)
+                    key = key .. (epic and "_epic" or (rare and "_rare" or ""))
+                    gkey[id] = key
+                    -- Lowest id first: the original monster, not a later variant.
+                    if not map[key] then map[key] = FRIENDLY.__withRarity(nm, id) end
                 end
             else
                 misses = misses + 1
                 if misses > 300 then break end
             end
         end
+        -- The shift k where getPortraitName(id + k) is id's own picture.
+        local bestK, bestN, total = nil, 0, 0
+        for _ in pairs(gkey) do total = total + 1 end
+        for k = -60, 60 do
+            local hits = 0
+            for id, key in pairs(gkey) do if pcode[id + k] == key then hits = hits + 1 end end
+            if hits > bestN then bestK, bestN = k, hits end
+        end
+        a11y_log("[flip] getPortraitName shift " .. tostring(bestK) .. ": " .. bestN .. " of " .. total .. " agree")
+        if bestK and bestN >= 10 and bestN * 2 >= total then
+            for id, nm in pairs(names) do
+                local c = pcode[id + bestK]
+                if c and not map[c] then map[c] = nm end
+            end
+        end
         FRIENDLY.__flip.portraits = map
         local n = 0; for _ in pairs(map) do n = n + 1 end
-        a11y_log("[flip] portrait names: " .. n)
+        a11y_log("[flip] portrait names by genes: " .. n .. ", d=" .. tostring(map.d) .. ", e_rare=" .. tostring(map.e_rare) .. ", VOC_01=" .. tostring(map.VOC_01))
     end
-    return map[code]
+    if map[short] then return map[short] end
+    local base, rest = short:match("^([a-g]+)_(.+)$")
+    if base and map[base] then return map[base] .. ", " .. rest:gsub("_", " ") end
+    return nil
+end
+-- The card's exact picture (and amount), to pair cards by what they show,
+-- not by how they sound.
+function FRIENDLY.__flip.code(entry)
+    local img = findNamed(entry, "CharacterImage", 1)
+    if not img then return nil end
+    local sp = ""
+    pcall(function() sp = tostring(img:C("Sprite")("spriteName"):GetString() or "") end)
+    if sp == "" or sp:find("portrait_random", 1, true) then return nil end
+    return sp .. "|" .. tostring(elementText(img))
 end
 -- What a card shows, or nil while face down.
 function FRIENDLY.__flip.face(entry)
@@ -3341,7 +3449,21 @@ function FRIENDLY.__flip.face(entry)
     end
     local cur = FRIENDLY.__flip.CURRENCY[code:lower()]
     if cur then return amt and (amt .. " " .. cur) or cur end
-    if code == "monster_portrait_prize" then return amt and ("Prize, " .. amt) or "Prize" end
+    if code == "monster_portrait_prize" then
+        -- The end-of-game reward cards show the prize's currency as an Icon.
+        local icon, vis = nil, 1
+        pcall(function() icon = img:C("Icon")("spriteName"):GetString() end)
+        pcall(function() vis = img:C("Icon")("visible"):GetInt() end)
+        local cur = nil
+        if icon and icon ~= "" and vis ~= 0 then
+            local low = icon:lower()
+            for _, w in ipairs(FRIENDLY.__currencyWords) do
+                if low:find(w[1], 1, true) then cur = w[2] break end
+            end
+        end
+        if amt and cur then return amt .. " " .. FRIENDLY.__unit(amt, cur) end
+        return amt and ("Prize, " .. amt) or "Prize"
+    end
     local name = FRIENDLY.__flip.portraitName(code)
     if not name then
         name = code:gsub("^monster_portrait_square_", ""):gsub("^monster_portrait_", ""):gsub("_", " ")
@@ -3352,9 +3474,22 @@ function FRIENDLY.__flip.label(entry, i)
     if not findNamed(entry, "CharacterImage", 1) then return nil end
     local face = FRIENDLY.__flip.face(entry)
     if not face then return "Card " .. i .. ", face down" end
-    -- Face up and not the card waiting for its pair: a matched card.
-    local matched = FRIENDLY.__flip.pending ~= i and liveMenu("flip_base") ~= nil
-    return "Card " .. i .. ": " .. face .. (matched and ", matched" or "")
+    -- Face up and not the card waiting for its pair: a matched card. Its
+    -- partner is the other face-up card with the same picture.
+    local root = liveMenu("flip_base")
+    if not root or FRIENDLY.__flip.pending == i then return "Card " .. i .. ": " .. face end
+    local partner = FRIENDLY.__flip.partner(root, i, FRIENDLY.__flip.code(entry))
+    if partner then return "Card " .. i .. ", " .. face .. ", matched with card " .. partner .. ", " .. face end
+    return "Card " .. i .. ": " .. face .. ", matched"
+end
+function FRIENDLY.__flip.partner(root, i, code)
+    if not code then return nil end
+    for j = 1, 40 do
+        local e = findNamed(root, "cardEntry" .. (j - 1), 3)
+        if not e then break end
+        if j ~= i and j ~= FRIENDLY.__flip.pending and FRIENDLY.__flip.code(e) == code then return j end
+    end
+    return nil
 end
 function FRIENDLY.__flip.status(root)
     return joinSentences({ shownText(root, "Title"), shownText(root, "Mismatches") })
@@ -3362,10 +3497,12 @@ end
 function FRIENDLY.__flip.turn(i)
     later(0.05, function()
         local root = liveMenu("flip_base")
+        local rewards = not root and liveMenu("flip_rewards")
+        root = root or rewards
         local entry = root and findNamed(root, "cardEntry" .. (i - 1), 3)
         local img = entry and findNamed(entry, "CharacterImage", 1)
         if not img then say("Card not found", true) return end
-        if FRIENDLY.__flip.face(entry) then
+        if not rewards and FRIENDLY.__flip.face(entry) then
             say("Card " .. i .. " is already face up: " .. FRIENDLY.__flip.face(entry), true)
             return
         end
@@ -3374,7 +3511,14 @@ function FRIENDLY.__flip.turn(i)
         local beforeTitle = shownText(root, "Title")
         local first = FRIENDLY.__flip.pending
         local second = first ~= nil and first ~= i
-        FRIENDLY.__flip.pending = second and nil or i
+        -- (Not "second and nil or i": that is always i.)
+        if rewards then
+            first, second = nil, false
+        elseif second then
+            FRIENDLY.__flip.pending = nil
+        else
+            FRIENDLY.__flip.pending = i
+        end
         -- The card's touch is FlipCardEntry's own CFlipCardTouch, which has no
         -- onTouchDown to call: tap its centre through the game's touch input,
         -- the way the scratch ticket is rubbed.
@@ -3396,10 +3540,14 @@ function FRIENDLY.__flip.turn(i)
         pcall(touch, fx, fy, 1)
         later(0.06, function() pcall(touch, fx, fy, 0) end)
         later(0.8, function()
-            local r = liveMenu("flip_base")
+            local r = liveMenu(rewards and "flip_rewards" or "flip_base")
             local e = r and findNamed(r, "cardEntry" .. (i - 1), 3)
             local face = e and FRIENDLY.__flip.face(e)
             local parts = { "Card " .. i .. ": " .. (face or "face down") }
+            if rewards then
+                say(parts[1], true)
+                return
+            end
             if second then
                 local mis = r and shownText(r, "Mismatches")
                 local title = r and shownText(r, "Title")
@@ -3408,7 +3556,7 @@ function FRIENDLY.__flip.turn(i)
                 elseif mis and beforeMis and mis ~= beforeMis then
                     parts[#parts + 1] = "No match"
                 else
-                    parts[#parts + 1] = "Match"
+                    parts[#parts + 1] = "Match with card " .. first
                 end
             end
             local after = r and FRIENDLY.__flip.status(r)
@@ -3857,6 +4005,8 @@ local function tapEntity(entity, name, wantKey, reselect, done, untilSomething)
         return e == nil
     end
     local points, closer = TAP_POINTS, false
+    -- What the clicks hit instead, by name, so a miss can say what is in front.
+    local blockers, seenBlocker = {}, {}
     local function try(i)
         local pt = points[i]
         local clickedAt = clock()
@@ -3873,20 +4023,28 @@ local function tapEntity(entity, name, wantKey, reselect, done, untilSomething)
             local miss = selectionIs(wantKey, name) == false
                 or (untilSomething and got == nil and not menuState.openedSince(clickedAt))
             a11y_log("[tap] " .. name .. " point " .. i .. " -> " .. tostring(got) .. (miss and " (miss)" or ""))
+            if miss and got then
+                local bn = selectedName()
+                if bn and not seenBlocker[bn] and bn:lower() ~= name:lower() then
+                    seenBlocker[bn] = true
+                    blockers[#blockers + 1] = bn
+                end
+            end
             if miss and i < #points then
                 if reselect then pcall(reselect) end
                 later(0.2, function() try(i + 1) end)
-            elseif miss and not closer and got ~= nil then
-                -- Everything hit something else: zoom in and try again.
+            elseif miss and not closer then
+                -- Everything hit something else or empty ground (a small
+                -- rock behind a building): zoom in and try again.
                 closer, points = true, FRIENDLY.__tapClosePoints
                 if reselect then pcall(reselect) end
                 a11y_log("[tap] " .. name .. ": zooming in closer")
                 local zok = pcall(function() game.worldContext():zoomCameraToObject(entity, FRIENDLY.__tapCloseZoom, TAP_SECONDS) end)
                 if zok then later(TAP_SECONDS + 0.25, function() try(1) end)
-                elseif done then done(false) end
+                elseif done then done(false, nil, blockers) end
             elseif done then
                 if miss and reselect then pcall(reselect) end
-                done(not miss)
+                done(not miss, nil, blockers)
             end
         end)
     end
@@ -3983,7 +4141,7 @@ local function activateObject(entity, label, select, wantKey)
         end
         a11y_log("[tap] direct select of " .. label .. " didn't take (" .. tostring(got) .. "), tapping")
         local tapStart = clock()
-        tapEntity(entity, label, wantKey, select, function(hit, how)
+        tapEntity(entity, label, wantKey, select, function(hit, how, blockers)
             later(0.15, function()
                 if how == "gone" then
                     FRIENDLY.__objCache = nil
@@ -3999,6 +4157,11 @@ local function activateObject(entity, label, select, wantKey)
                     -- The click selected nothing; that's normal when the tap
                     -- does its own thing (hatch, collect), but say so honestly.
                     say("Clicked on " .. label .. ". If nothing happened, the click missed.", true)
+                elseif blockers and #blockers > 0 then
+                    -- Covered on screen: a sighted player would move one first.
+                    say("Could not tap " .. label .. ". " .. FRIENDLY.__andList(blockers) .. " "
+                        .. (#blockers == 1 and "is" or "are") .. " in front of it. Moving "
+                        .. (#blockers == 1 and "it" or "one of them") .. " would uncover it.", true)
                 else
                     say("Could not tap " .. label .. ". Something is in front of it, or nothing answered the click.", true)
                 end
@@ -4211,6 +4374,12 @@ local function structureStatus(id)
         -- Finished removals sit at a small negative time; never-started ones
         -- read as a huge negative number.
         if secs < 0 and secs > -MAX_BUSY_SECONDS then return "removal finished, tap it to clear it away" end
+        return nil
+    elseif not upgrading and not entityIs(ent, "isDecoration") and (structureLabel(id) or ""):lower():find("mine$") then
+        -- Mini Mine, Maximum Mine: the timer is the next diamond. (The
+        -- island's hasMineReady can't tell two mines apart; the timer can.)
+        if busy then return "mining diamonds, " .. durationText(secs) .. " left" end
+        if islandReady("hasMineReady") and FRIENDLY.__timerSaysDone(id, "mine", secs) then return "diamonds ready to collect" end
         return nil
     end
     if busy then return (upgrading and "upgrading, " or "building, ") .. durationText(secs) .. " left" end
@@ -7015,6 +7184,7 @@ if type(jeode) == "table" and type(jeode.registerGlobal) == "function" then
             tutstep = announceTutorialStep,
             xp = function() FRIENDLY.__xp() end,
             advice = function() FRIENDLY.__advice() end,
+            describe = function() FRIENDLY.__describe() end,
         }
         local fn = run[what]
         if fn then fn() end
@@ -7031,7 +7201,7 @@ if type(jeode) == "table" and type(jeode.registerGlobal) == "function" then
         navMove(dir)
     end)
     -- Number keys 1 to 0 (items 1-10) and Shift+1 to Shift+0 (11-20): the
-    -- items of a list of 20 or fewer. One
+    -- first 20 items of any list (Tab goes on from there). One
     -- press moves there and says it; go (a second press of the same key, or
     -- any press in instant mode, Control+Shift+N; decided natively) presses it.
     jeode.registerGlobal("a11y_numKey", function(n, go)
@@ -7047,10 +7217,6 @@ if type(jeode) == "table" and type(jeode.registerGlobal) == "function" then
                 return
             end
             count = #nav.items
-        end
-        if count > 20 then
-            say("Number keys work on lists of 20 or fewer. This one has " .. count, true)
-            return
         end
         if n > count then say("No item " .. n .. ". This list has " .. count, true) return end
         if vmenu.active then vmenu.index = n else nav.index = n end
@@ -7278,6 +7444,197 @@ end
         end
     end
     jeode.registerGlobal("a11y_advice", FRIENDLY.__keyGuard(function() FRIENDLY.__advice() end))
+
+    -- A rough picture of the island (Control+Shift+V): rules, not AI. The
+    -- island is cut into nine areas as seen on screen (screen left/right is
+    -- x + y, up/down is y - x, as in directionWords), sized to where things
+    -- actually are. Then: buildings by area, where the monsters are, same-kind
+    -- monsters standing together, monsters on their own, empty areas, and
+    -- trees, rocks and decorations as totals.
+    FRIENDLY.__AREA_AT = { "at the top left", "at the top", "at the top right", "on the left", "in the middle",
+        "on the right", "at the bottom left", "at the bottom", "at the bottom right" }
+    function FRIENDLY.__andList(items)
+        if #items <= 1 then return items[1] or "" end
+        return table.concat(items, ", ", 1, #items - 1) .. " and " .. items[#items]
+    end
+    function FRIENDLY.__plural(n, word)
+        if n == 1 then return word end
+        if word:find("[sx]$") or word:find("[cs]h$") then return word .. "es" end
+        if word:find("[^aeiouAEIOU]y$") then return word:sub(1, -2) .. "ies" end
+        return word .. "s"
+    end
+    function FRIENDLY.__describe()
+        if popupOpen() or topOverlay() or placing() then say("Describing works on an island, with nothing open", true) return end
+        if FRIENDLY.__visiting() or liveMenu("hud_clubbox") then say("Describing works on your own islands", true) return end
+        local list = landmarks(true)
+        if #list == 0 then say("Nothing to describe here yet", true) return end
+        local AT = FRIENDLY.__AREA_AT
+        local minH, maxH, minV, maxV
+        for _, l in ipairs(list) do
+            l.h = screenSign.sx * (l.x + l.y)
+            l.v = screenSign.sy * (l.y - l.x)
+            if not minH or l.h < minH then minH = l.h end
+            if not maxH or l.h > maxH then maxH = l.h end
+            if not minV or l.v < minV then minV = l.v end
+            if not maxV or l.v > maxV then maxV = l.v end
+        end
+        local function third(val, lo, hi)
+            if hi - lo < 3 then return 1 end
+            local t = math.floor((val - lo) * 3 / (hi - lo + 1))
+            return t < 0 and 0 or (t > 2 and 2 or t)
+        end
+        for _, l in ipairs(list) do l.area = third(l.v, minV, maxV) * 3 + third(l.h, minH, maxH) + 1 end
+        local function kind(l) return (l.species or l.name or "?"):gsub("%s+%d+$", "") end
+        local function near(a, b, r) return math.abs(a.x - b.x) <= r and math.abs(a.y - b.y) <= r end
+        local mons, builds, decos, rocks = {}, {}, {}, {}
+        for _, l in ipairs(list) do
+            local t = l.rank == 0 and mons or (l.rank == 1 and builds or (l.rank == 2 and decos or rocks))
+            t[#t + 1] = l
+        end
+        -- Pressed twice quickly: everything, area by area.
+        local now = clock()
+        local again = FRIENDLY.__describeAt and now - FRIENDLY.__describeAt < 0.8
+        FRIENDLY.__describeAt = not again and now or nil
+        if again then
+            local NAME = { "Top left", "Top", "Top right", "Left", "Middle", "Right", "Bottom left", "Bottom", "Bottom right" }
+            local function names(items)
+                local n, order = {}, {}
+                for _, l in ipairs(items) do
+                    local k = kind(l)
+                    if not n[k] then n[k] = 0; order[#order + 1] = k end
+                    n[k] = n[k] + 1
+                end
+                local out = {}
+                for _, k in ipairs(order) do out[#out + 1] = n[k] > 1 and (n[k] .. " " .. FRIENDLY.__plural(n[k], k)) or k end
+                return FRIENDLY.__andList(out)
+            end
+            local out = {}
+            for i = 1, 9 do
+                local function inArea(t) local r = {} for _, l in ipairs(t) do if l.area == i then r[#r + 1] = l end end return r end
+                local b, m, d, r = inArea(builds), inArea(mons), inArea(decos), inArea(rocks)
+                local bits = {}
+                if #b > 0 then bits[#bits + 1] = names(b) end
+                if #m > 0 then bits[#bits + 1] = "monsters: " .. names(m) end
+                if #d > 0 then bits[#bits + 1] = #d .. " " .. FRIENDLY.__plural(#d, "decoration") end
+                if #r > 0 then bits[#bits + 1] = #r .. " " .. (#r == 1 and "tree or rock" or "trees and rocks") end
+                out[#out + 1] = NAME[i] .. ": " .. (#bits > 0 and table.concat(bits, "; ") or "empty")
+            end
+            say(joinSentences(out), true)
+            return
+        end
+        local parts = { readIsland() }
+        -- Where most of a group is: "mostly at the bottom", or "spread around".
+        local function mostly(items)
+            local count, best = {}, nil
+            for _, l in ipairs(items) do
+                count[l.area] = (count[l.area] or 0) + 1
+                if not best or count[l.area] > count[best] then best = l.area end
+            end
+            if #items >= 4 and count[best] * 10 < #items * 4 then return "spread around" end
+            return (#items == 1 and "" or "mostly ") .. AT[best]
+        end
+        -- Buildings, grouped by area: "the Castle and Nursery at the top".
+        if #builds > 0 then
+            local byArea = {}
+            for _, b in ipairs(builds) do
+                local a = byArea[b.area] or { n = {}, order = {} }
+                byArea[b.area] = a
+                local k = kind(b)
+                if not a.n[k] then a.n[k] = 0; a.order[#a.order + 1] = k end
+                a.n[k] = a.n[k] + 1
+            end
+            local groups = {}
+            for i = 1, 9 do
+                local a = byArea[i]
+                if a then
+                    local names = {}
+                    for _, k in ipairs(a.order) do
+                        names[#names + 1] = a.n[k] > 1 and (a.n[k] .. " " .. FRIENDLY.__plural(a.n[k], k)) or k
+                    end
+                    groups[#groups + 1] = FRIENDLY.__andList(names) .. " " .. AT[i]
+                end
+            end
+            parts[#parts + 1] = "Buildings: " .. table.concat(groups, "; ")
+        end
+        -- Monsters: how many, and the busiest areas.
+        if #mons == 0 then
+            parts[#parts + 1] = "No monsters here yet"
+        else
+            local count = {}
+            for _, m in ipairs(mons) do count[m.area] = (count[m.area] or 0) + 1 end
+            local order = {}
+            for i = 1, 9 do if count[i] then order[#order + 1] = i end end
+            table.sort(order, function(a, b) if count[a] ~= count[b] then return count[a] > count[b] end return a < b end)
+            local shown, said = {}, 0
+            for _, a in ipairs(order) do
+                if #shown >= 3 or (said * 10 >= #mons * 7 and #shown > 0) then break end
+                shown[#shown + 1] = count[a] .. " " .. AT[a]
+                said = said + count[a]
+            end
+            if said < #mons then shown[#shown + 1] = (#mons - said) .. " elsewhere" end
+            parts[#parts + 1] = #mons .. " " .. FRIENDLY.__plural(#mons, "monster")
+                .. (#order == 1 and ((#mons == 1 and ", " or ", all ") .. AT[order[1]]) or (": " .. FRIENDLY.__andList(shown)))
+            -- Same kind standing together (within 3 tiles of each other, chained).
+            local groupsSaid, done = {}, {}
+            for i, m in ipairs(mons) do
+                if not done[i] then
+                    local comp, queue = { m }, { i }
+                    done[i] = true
+                    while #queue > 0 do
+                        local a = mons[table.remove(queue)]
+                        for j, o in ipairs(mons) do
+                            if not done[j] and kind(o) == kind(m) and near(a, o, 3) then
+                                done[j] = true; comp[#comp + 1] = o; queue[#queue + 1] = j
+                            end
+                        end
+                    end
+                    if #comp >= 2 then groupsSaid[#groupsSaid + 1] = { n = #comp, text = #comp .. " " .. FRIENDLY.__plural(#comp, kind(m)) .. " together " .. mostly(comp):gsub("^mostly ", "") } end
+                end
+            end
+            table.sort(groupsSaid, function(a, b) return a.n > b.n end)
+            local gt = {}
+            for i = 1, math.min(3, #groupsSaid) do gt[i] = groupsSaid[i].text end
+            if #gt > 0 then parts[#parts + 1] = FRIENDLY.__andList(gt) end
+            -- On their own: no other monster within 4 tiles.
+            local alone = {}
+            for _, m in ipairs(mons) do
+                local lonely = true
+                for _, o in ipairs(mons) do if o ~= m and near(m, o, 4) then lonely = false break end end
+                if lonely then alone[#alone + 1] = m end
+            end
+            if #mons > 1 and #alone > 0 then
+                local at = {}
+                for i = 1, math.min(2, #alone) do
+                    local k = kind(alone[i])
+                    at[i] = (k:find("^[AEIOUaeiou]") and "an " or "a ") .. k .. " " .. AT[alone[i].area]
+                end
+                local s = FRIENDLY.__andList(at)
+                s = s:sub(1, 1):upper() .. s:sub(2)
+                if #alone > 2 then s = s .. ", and " .. (#alone - 2) .. " more" end
+                parts[#parts + 1] = s .. (#alone == 1 and " stands on its own" or " stand on their own")
+            end
+        end
+        -- Areas with no monsters or buildings.
+        local used = {}
+        for _, l in ipairs(mons) do used[l.area] = true end
+        for _, l in ipairs(builds) do used[l.area] = true end
+        local empty = {}
+        for i = 1, 9 do if not used[i] then empty[#empty + 1] = (AT[i]:gsub("^%a+ the ", "")) end end
+        if #empty == 1 and #mons + #builds >= 4 then
+            parts[#parts + 1] = "No monsters or buildings " .. AT[(function() for i = 1, 9 do if not used[i] then return i end end end)()]
+        elseif #empty > 1 and #empty < 9 and #mons + #builds >= 4 then
+            parts[#parts + 1] = "No monsters or buildings in these areas: " .. FRIENDLY.__andList(empty)
+        end
+        if #rocks > 0 then
+            parts[#parts + 1] = #rocks .. " " .. (#rocks == 1 and "tree or rock" or "trees and rocks") .. ", " .. mostly(rocks)
+        end
+        if #decos > 0 then
+            parts[#parts + 1] = #decos .. " " .. FRIENDLY.__plural(#decos, "decoration") .. ", " .. mostly(decos)
+        end
+        say(joinSentences(parts), true)
+        a11y_log("[describe] " .. #list .. " objects, H " .. minH .. ".." .. maxH .. ", V " .. minV .. ".." .. maxV)
+    end
+    jeode.registerGlobal("a11y_describe", FRIENDLY.__keyGuard(function() FRIENDLY.__describe() end))
     jeode.registerGlobal("a11y_poi", function(dir)
         if FRIENDLY.__keysLocked() then return end
         if placing() then poiStep(dir) else navGroupJump(dir) end

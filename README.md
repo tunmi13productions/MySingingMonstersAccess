@@ -100,7 +100,7 @@ The single-letter keys (A, W, X, M, O, I, C, T) do nothing while a text box is o
 | Enter | Press the current item |
 | Escape or Backspace | Go back: close the screen, cancel, answer No, or deselect. The game's own Escape is tried first. |
 | Home and End | Jump to the first or last item of the current list or screen. |
-| 1 to 9, and 0; Shift+1 to Shift+0 | On a list of 20 items or fewer (such as a monster's buttons or a Yes/No question), 1 is the first item and 0 the tenth, and Shift+1 to Shift+0 are items 11 to 20. Press once to hear it, and press the same number again quickly to press it. They do nothing in a text box, so you can type numbers, and they keep working when Control+Shift+L has turned the single letters off. |
+| 1 to 9, and 0; Shift+1 to Shift+0 | On any list (such as a monster's buttons or a Yes/No question), 1 is the first item and 0 the tenth, and Shift+1 to Shift+0 are items 11 to 20. On a longer list, Tab goes on from there. Press once to hear it, and press the same number again quickly to press it. They do nothing in a text box, so you can type numbers, and they keep working when Control+Shift+L has turned the single letters off. |
 | Control+Shift+S | Stereo width for the monsters' singing: cycles through the game's own, gentle, normal (the default), wide and widest. The game hears everything from the camera high above the island, so on its own nearly every monster sounds centred; with the mod, a monster on the left of the view sings in your left ear. Best with headphones. The choice is remembered. |
 | Control+Shift+Left and Right Arrow | Stereo width in small steps (0 to 5), for fine-tuning. |
 | Control+Shift+N | Number keys: cycle between "press once to hear, twice to act" (the default), "one press acts" and off. The choice is remembered. |
@@ -113,6 +113,7 @@ The single-letter keys (A, W, X, M, O, I, C, T) do nothing while a text box is o
 | W (fallback: Control+Shift+W) | What now: things that are ready and your current goals. |
 | X (fallback: Control+Shift+X) | XP: how much you have towards the next level and how much is left. |
 | F (fallback: Control+Shift+F) | Advice for your island: how many trees and rocks are right next to your monsters and buildings, which one is easiest to clear first (by its name in the Trees and rocks list), and whether coins are waiting. Tab moves onto that tree or rock, so Enter selects it. |
+| V (fallback: Control+Shift+V) | A rough description of your island: which buildings are where, where your monsters are, monsters of the same kind standing together, any standing on their own, empty areas, and how many trees, rocks and decorations there are. Press it twice quickly to hear everything area by area. Directions are as seen on screen. |
 | M (fallback: Control+Shift+M) | Places: Market, Book of Monsters, Map, Goals, Friends, Mail, Options. |
 | O (fallback: Control+Shift+O) | A list of everything on your island. |
 | I (fallback: Control+Shift+I) | With a monster selected: what it looks like, and its elements. Descriptions are written from the game's own pictures and cover the natural monsters (Plant Island and the other early islands) and the Dipsters so far; more will be added. |

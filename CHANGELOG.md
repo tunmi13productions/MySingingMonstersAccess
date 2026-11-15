@@ -2,6 +2,20 @@
 
 What changed in each version of My Singing Monsters Access, newest first. Changes that are done but not yet in a release are listed under Unreleased.
 
+## Unreleased
+
+### Added
+
+- V (fallback Control+Shift+V) describes your island: which buildings are where, where your monsters are, which ones stand together or on their own, and which areas are empty. Press it twice quickly to hear everything in each area.
+
+### Fixed
+
+- Memory: turning over the first card of a pair no longer says "Match", monsters are named correctly, a matched card says which card it matched (for example "Card 1, Food, matched with card 8, Food"), and the prize cards at the end can be turned over and say what they give.
+- When a tree or rock is hidden behind something, Enter now zooms in for a closer try, and if that fails it says what is in front of it, for example "Fuzer is in front of it".
+- Mines say "mining diamonds" and how long is left, instead of "building", and "diamonds ready to collect" when done.
+- Number keys now work on lists of any length: they reach the first 20 items, and Tab goes on from there.
+- The Market's Packs now say what each pack gives, for example "158 Diamonds, $4.99 USD, 50% extra, was 105", and the exchanges say what they trade, for example "1 Relic for 1 Diamond".
+
 ## 0.1.14-alpha - 2026-11-12
 
 ### Added

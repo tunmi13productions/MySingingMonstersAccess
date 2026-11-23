@@ -13,6 +13,7 @@ What changed in each version of My Singing Monsters Access, newest first. Change
 - After the November game update, trees and rocks were listed under Buildings and decorations were mixed up; they are sorted into Trees and rocks and Decorations again.
 - Some decorations placed after the November game update were listed as "Structure" and Enter couldn't select them; they now have their real names, for example Moshroom Path, and Enter selects them.
 - After the November game update, many objects were missing from the island list (most decorations, extra Bakeries, the Bonus Nursery and more); they are all listed again.
+- On a friend's island, buildings, decorations, and trees and rocks are listed again after the November game update.
 - Memory: turning over the first card of a pair no longer says "Match", monsters are named correctly, a matched card says which card it matched (for example "Card 1, Food, matched with card 8, Food"), and the prize cards at the end can be turned over and say what they give.
 - When a tree or rock is hidden behind something, Enter now zooms in for a closer try, and if that fails it says what is in front of it, for example "Fuzer is in front of it".
 - Mines say "mining diamonds" and how long is left, instead of "building", and "diamonds ready to collect" when done.

@@ -4612,10 +4612,11 @@ end
 
 -- Every structure on the island (not just the first of each type: there are
 -- usually several Small Trees and Rocks). Falls back to the type scan.
-local function islandStructureIds()
+-- isl: the island to list (a friend's); default your active island.
+local function islandStructureIds(isl)
     local ids, seen = {}, {}
     local lok, lerr = pcall(function()
-        local ss = game.player():getActiveIsland():structures()
+        local ss = (isl or game.player():getActiveIsland()):structures()
         for i = 0, ss:size() - 1 do
             local id = ss[i]
             if id and not seen[id] then seen[id] = true; ids[#ids + 1] = id end
@@ -4647,7 +4648,7 @@ local function islandStructureIds()
     end
     if lo then
         local iid = nil
-        pcall(function() iid = game.player():getActiveIsland():uniqueId() end)
+        pcall(function() iid = (isl or game.player():getActiveIsland()):uniqueId() end)
         local c, now = FRIENDLY.__gapCache, clock()
         if not (c and c.island == iid and c.n == #ids and now - c.t < 5) then
             c = { island = iid, n = #ids, t = now, extra = {} }
@@ -4659,9 +4660,10 @@ local function islandStructureIds()
                 end
             end
             FRIENDLY.__gapCache = c
-            if not FRIENDLY.__gapLogged then
+            if not FRIENDLY.__gapLogged or (isl and not FRIENDLY.__gapFriendLogged) then
                 FRIENDLY.__gapLogged = true
-                a11y_log("[kind] island list had " .. #ids .. ", lookups found " .. #c.extra .. " more, in "
+                if isl then FRIENDLY.__gapFriendLogged = true end
+                a11y_log("[kind] " .. (isl and "friend " or "") .. "island " .. tostring(iid) .. " list had " .. #ids .. ", lookups found " .. #c.extra .. " more, in "
                     .. math.floor((clock() - now) * 1000) .. " ms")
             end
         end
@@ -4702,11 +4704,15 @@ function FRIENDLY.__friendObjects()
     end
     local structs, total, nth, logged = {}, {}, {}, 0
     pcall(function()
-        local ss = isl:structures()
-        for i = 0, ss:size() - 1 do
-            local id = ss[i]
+        -- Island:structures() is gone since game 5.7.6: islandStructureIds
+        -- seeds from the first of each type and looks up the ids around
+        -- them. Read-only lookups of what's on screen; skip ids that aren't
+        -- on their island (the type scan may answer for yours).
+        local fids = islandStructureIds(isl)
+        for _, id in ipairs(fids) do
             local ent = nil
             pcall(function() ent = game.GetStructure(id) end)
+            if ent then
             -- Name it from the object on screen (theirs), the way the game's
             -- scripts do (entityId -> getStructureByEntityId / entityName);
             -- structureLabel looks the id up in YOUR data, so it's a fallback.
@@ -4732,6 +4738,10 @@ function FRIENDLY.__friendObjects()
             end
             structs[#structs + 1] = { label = label, rank = rank, id = id }
             total[label] = (total[label] or 0) + 1
+            end
+        end
+        if not FRIENDLY.__friendLogged then
+            a11y_log("[friend] " .. #fids .. " structure ids, " .. #structs .. " on their island")
         end
     end)
     local mons = {}

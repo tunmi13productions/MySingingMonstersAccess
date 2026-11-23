@@ -353,7 +353,7 @@ end
 local TITLE_NAMES = { "Title", "TitleText", "TitleLabel", "Header" }
 -- Left / Center / Right: the numbered steps of "How it works" screens.
 local BODY_NAMES = { "Text", "Message", "MessageText", "Body", "Description", "Desc", "Notification", "Notification2",
-                     "NotificationBottom",
+                     "NotificationBottom", "NoMonstersLabel",
                      "Left", "Center", "Right" }
 
 local function popupTitle(popup)
@@ -1148,7 +1148,7 @@ local function withGoalContext(el, label)
         if t and t ~= "" then out = out .. ". Progress " .. t end
     end
     local rewards = goalRewards(row)
-    if #rewards > 0 then out = out .. ". Reward: " .. table.concat(rewards, ", ") end
+    if #rewards > 0 then out = out:gsub("%.$", "") .. ". Reward: " .. table.concat(rewards, ", ") end
     return out
 end
 
@@ -1491,10 +1491,12 @@ local popupStack = {}
 FRIENDLY.__lockUntil = -100
 FRIENDLY.__storeSeenAt = -100
 FRIENDLY.__seen = {}
-function FRIENDLY.__lockKeys(why)
+function FRIENDLY.__lockKeys(why, secs)
+    secs = secs or 4
     local now = 0; pcall(function() now = os.clock() end)
-    if now >= FRIENDLY.__lockUntil then a11y_log("[quiet] 4 seconds: " .. tostring(why)) end
-    FRIENDLY.__lockUntil = now + 4
+    if now >= FRIENDLY.__lockUntil then a11y_log("[quiet] " .. secs .. " seconds: " .. tostring(why)) end
+    -- Never shorten a longer quiet period already running.
+    if now + secs > FRIENDLY.__lockUntil then FRIENDLY.__lockUntil = now + secs end
 end
 function FRIENDLY.__quietNow(now)
     return now < FRIENDLY.__lockUntil
@@ -1716,6 +1718,12 @@ local function menuTick(root, file)
             FRIENDLY.__storeSeenAt = now
         elseif file == "hud" and appeared and now - FRIENDLY.__storeSeenAt < 10 then
             FRIENDLY.__lockKeys("back from the Market")
+        elseif file == "load_map" and appeared then
+            FRIENDLY.__travelAt = now
+            FRIENDLY.__lockKeys("travelling (load_map)", 8)
+        elseif file == "hud" and appeared and now - (FRIENDLY.__travelAt or -100) < 60 then
+            FRIENDLY.__travelAt = -100
+            FRIENDLY.__lockKeys("arrived on an island")
         end
         if file == "contextbar" then pcall(FRIENDLY.__wrapBar, root) end
         if FRIENDLY.__quietNow(now) then return end
@@ -1728,6 +1736,7 @@ local function menuTick(root, file)
     if file == "login_base" and FRIENDLY.__loadingTick then pcall(FRIENDLY.__loadingTick, root) end
     if file == "newsflash" and FRIENDLY.__newsTick then pcall(FRIENDLY.__newsTick, root, now) end
     if file == "hype_game" and FRIENDLY.__hypeTick then pcall(FRIENDLY.__hypeTick, root, now) end
+    if FRIENDLY.__recHelp[file] then pcall(FRIENDLY.__recHelpTick, root, file, now) end
     if file == "clubbox_customization" and FRIENDLY.__mixTick then pcall(FRIENDLY.__mixTick, root, now) end
     if file == "empty" and FRIENDLY.__emptyTick then pcall(FRIENDLY.__emptyTick, now) end
     if (file == "clubbox_act_select" or file == "clubbox_tutorial_popup") and FRIENDLY.__clubTick then
@@ -2353,6 +2362,20 @@ function FRIENDLY.__entityName(eid)
     end
     return (n and n ~= "") and n or nil
 end
+-- The selected structure's id, in the island list's form. Since the
+-- 2026-11 update a placed decoration can have a negative id (-1314399) in
+-- the island's structures() list while selectedStructureId() returns the
+-- same 32 bits unsigned (4293652897). Fold it back to the signed form.
+function FRIENDLY.__signedId(n)
+    n = tonumber(n)
+    if n and n >= 2147483648 and n < 4294967296 then n = n - 4294967296 end
+    return n
+end
+function FRIENDLY.__selSid()
+    local s = nil
+    pcall(function() s = FRIENDLY.__signedId(game.selectedStructureId()) end)
+    return s
+end
 function FRIENDLY.__likes(typeId)
     local likes = game.getLikes(typeId)
     local n = likes:size()
@@ -2812,7 +2835,7 @@ function FRIENDLY.__removeLabel(el)
     if not cost then return nil end
     pcall(function()
         FRIENDLY.__sidPrice = FRIENDLY.__sidPrice or {}
-        FRIENDLY.__sidPrice[game.selectedStructureId()] = cost
+        FRIENDLY.__sidPrice[FRIENDLY.__selSid()] = cost
     end)
     local t = tostring(math.floor(cost)):reverse():gsub("(%d%d%d)", "%1,"):reverse():gsub("^,", "")
     return "Remove, " .. t .. " coins"
@@ -3216,6 +3239,38 @@ function FRIENDLY.__clubTick(root, now)
     if iid ~= C.island then
         C.island = iid
         if iid then later(0.3, function() say("Island: " .. island, false) end) end
+    end
+end
+-- Recording Studio guide (GUIDE): each page is a few captions beside
+-- pictures of the studio's buttons. Read them once when the page appears.
+FRIENDLY.__recHelp = {
+    recording_help_pg1 = { "TopScroll", "PlayButtonImage", "StopButtonImage", "RecordButtonImage", "TrackButton" },
+    recording_help_pg2 = { "MetronomeImage", "TrackbarImage", "MuteButtonImage", "RevertButton" },
+}
+FRIENDLY.__recHelpAt = {}
+function FRIENDLY.__recHelpTick(root, file, now)
+    local last = FRIENDLY.__recHelpAt[file]
+    FRIENDLY.__recHelpAt[file] = now
+    if last and now - last < 1.5 then return end
+    local page = findNamed(root, file, 3) or root
+    local parts = {}
+    for _, nm in ipairs(FRIENDLY.__recHelp[file]) do
+        local t = shownText(page, nm)
+        if t then parts[#parts + 1] = t end
+    end
+    if #parts == 0 then return end
+    local n = file == "recording_help_pg1" and 1 or 2
+    local text = "Guide, page " .. n .. " of 2. " .. joinSentences(parts)
+    later(0.5, function() say(text, false) end)
+    if not FRIENDLY.__recProbed then
+        FRIENDLY.__recProbed = true
+        local out = {}
+        for _, f in ipairs({ "startAudioRecording", "prepareAudioRecording", "endAudioRecording", "SelectRecordingMonster",
+                             "GetRecordingStudioBroadcaster", "getAvailableMonstersForRecording" }) do
+            local ty = "?"; pcall(function() ty = type(game[f]) end)
+            out[#out + 1] = f .. "=" .. ty
+        end
+        a11y_log("[record] " .. table.concat(out, " "))
     end
 end
 function FRIENDLY.__newsTick(root, now)
@@ -3946,7 +4001,10 @@ local function selectionKey()
     local isMonster, key = false, nil
     pcall(function() isMonster = game.selectedObjIsMonster() and true or false end)
     if isMonster then pcall(function() key = "m" .. tostring(game.selectedMonsterId()) end)
-    else pcall(function() key = "s" .. tostring(game.selectedStructureId()) end) end
+    else
+        local sid = FRIENDLY.__selSid()
+        key = sid and ("s" .. tostring(sid)) or nil
+    end
     return key
 end
 
@@ -3984,10 +4042,25 @@ FRIENDLY.__tapClosePoints = {
 -- reselect: puts our object back after a miss. done(hit): called at the end.
 -- untilSomething: also count a click that selected nothing and opened no
 -- screen as a miss (it hit empty ground), and try the next point.
+-- The camera's context: the island's world context at home; on a friend's
+-- island there is none (worldContext is nil), so the current game context
+-- (zoomCameraToObject belongs to GameContext, which both share).
+function FRIENDLY.__camCtx()
+    local wc = nil
+    pcall(function() wc = game.worldContext() end)
+    if wc then return wc end
+    pcall(function() wc = game.gameContext() end)
+    if not FRIENDLY.__camLogged then
+        FRIENDLY.__camLogged = true
+        a11y_log("[tap] no worldContext; gameContext = " .. tostring(wc))
+    end
+    return wc
+end
+
 local function tapEntity(entity, name, wantKey, reselect, done, untilSomething)
     if not entity then say("Can't find " .. name, true) if done then done(false) end return end
     if type(clickFraction) ~= "function" and not resolve("a11y_touch") then say("Click function unavailable", true) return end
-    local ok, err = pcall(function() game.worldContext():zoomCameraToObject(entity, TAP_ZOOM, TAP_SECONDS) end)
+    local ok, err = pcall(function() FRIENDLY.__camCtx():zoomCameraToObject(entity, TAP_ZOOM, TAP_SECONDS) end)
     if not ok then
         -- Camera didn't move: a click would hit whatever is mid-screen.
         a11y_log("[tap] zoomCameraToObject failed, not clicking: " .. tostring(err))
@@ -3997,7 +4070,7 @@ local function tapEntity(entity, name, wantKey, reselect, done, untilSomething)
     -- A tap can make the object go away instead of selecting it (clearing a
     -- tree or rock whose removal has finished). Then stop: further taps would
     -- land on whatever was behind it.
-    local sid = wantKey and tonumber(tostring(wantKey):match("^s(%d+)$"))
+    local sid = wantKey and tonumber(tostring(wantKey):match("^s(%-?%d+)$"))
     local function gone()
         if not sid then return false end
         local e = nil
@@ -4039,7 +4112,7 @@ local function tapEntity(entity, name, wantKey, reselect, done, untilSomething)
                 closer, points = true, FRIENDLY.__tapClosePoints
                 if reselect then pcall(reselect) end
                 a11y_log("[tap] " .. name .. ": zooming in closer")
-                local zok = pcall(function() game.worldContext():zoomCameraToObject(entity, FRIENDLY.__tapCloseZoom, TAP_SECONDS) end)
+                local zok = pcall(function() FRIENDLY.__camCtx():zoomCameraToObject(entity, FRIENDLY.__tapCloseZoom, TAP_SECONDS) end)
                 if zok then later(TAP_SECONDS + 0.25, function() try(1) end)
                 elseif done then done(false, nil, blockers) end
             elseif done then
@@ -4112,7 +4185,7 @@ local function activateObject(entity, label, select, wantKey)
                 pcall(function() ready = game.eggReadyToHatch() and true or false end)
             end
             if ready then
-                local id = wantKey and tonumber(wantKey:match("^s(%d+)$"))
+                local id = wantKey and tonumber(wantKey:match("^s(%-?%d+)$"))
                 local hok, herr = pcall(function() game.hatchEgg() end)
                 if not hok and id and tostring(herr):find("args", 1, true) then
                     a11y_log("[hatch] hatchEgg(): " .. tostring(herr) .. "; trying with the id")
@@ -4139,7 +4212,7 @@ local function activateObject(entity, label, select, wantKey)
             say((selectedName() or label) .. " selected" .. (torch and (", " .. torch) or "") .. ". Tab for actions.", true)
             return
         end
-        a11y_log("[tap] direct select of " .. label .. " didn't take (" .. tostring(got) .. "), tapping")
+        a11y_log("[tap] direct select of " .. label .. " didn't take (" .. tostring(got) .. ", wanted " .. tostring(wantKey) .. ", selected name " .. tostring(selectedName()) .. "), tapping")
         local tapStart = clock()
         tapEntity(entity, label, wantKey, select, function(hit, how, blockers)
             later(0.15, function()
@@ -4219,6 +4292,25 @@ local function entityIs(ent, method)
     return v
 end
 
+-- Decoration or tree/rock? The game's own scripts ask the structure data's
+-- structureType(): 5 is a decoration, 6 an obstacle (SharedObjectInfo.lua,
+-- RewardProperties.lua). The 2026-11-18 game update removed isObstacle, so
+-- the entity flags are only a fallback. sd: structure data if the caller
+-- has it (a friend's island), else looked up by unique id (your island).
+-- Returns 3 (tree or rock), 2 (decoration) or nil.
+function FRIENDLY.__kindRank(id, ent, sd)
+    if not sd and id then pcall(function() sd = game.getStructureDataFromUniqueId(id) end) end
+    local t = nil
+    if sd then pcall(function() t = tonumber(sd:structureType()) end) end
+    if t == 6 then return 3 end
+    if t == 5 then return 2 end
+    if t == nil then
+        if entityIs(ent, "isObstacle") then return 3 end
+        if entityIs(ent, "isDecoration") then return 2 end
+    end
+    return nil
+end
+
 local MAX_BUSY_SECONDS = 60 * 60 * 24 * 60     -- larger means "never started" garbage
 
 -- The island's "something is ready" flags (hasNurseryReady etc.) don't say
@@ -4226,16 +4318,14 @@ local MAX_BUSY_SECONDS = 60 * 60 * 24 * 60     -- larger means "never started" g
 -- ready". So decide per building. Is this structure the selected one?
 function FRIENDLY.__isSelected(id)
     local s = nil
-    pcall(function() s = game.selectedStructureId() end)
+    s = FRIENDLY.__selSid()
     return s ~= nil and s == id
 end
 -- How many other structures of the same kind (isBakery, isBreeding) are not busy.
 function FRIENDLY.__otherIdle(id, method)
     local n = 0
     pcall(function()
-        local ss = game.player():getActiveIsland():structures()
-        for i = 0, ss:size() - 1 do
-            local o = ss[i]
+        for _, o in ipairs(FRIENDLY.__structIds and FRIENDLY.__structIds() or {}) do
             if o and o ~= id then
                 local e = nil
                 pcall(function() e = game.GetStructure(o) end)
@@ -4369,13 +4459,13 @@ local function structureStatus(id)
         if lit >= total then return "lit" end
         if lit == 0 and (perma or 0) == 0 then return "not lit" end
         return lit .. " of " .. total .. " torches lit"
-    elseif entityIs(ent, "isObstacle") then
+    elseif FRIENDLY.__kindRank(id, ent) == 3 then
         if busy then return "being removed, " .. durationText(secs) .. " left" end
         -- Finished removals sit at a small negative time; never-started ones
         -- read as a huge negative number.
         if secs < 0 and secs > -MAX_BUSY_SECONDS then return "removal finished, tap it to clear it away" end
         return nil
-    elseif not upgrading and not entityIs(ent, "isDecoration") and (structureLabel(id) or ""):lower():find("mine$") then
+    elseif not upgrading and FRIENDLY.__kindRank(id, ent) ~= 2 and (structureLabel(id) or ""):lower():find("mine$") then
         -- Mini Mine, Maximum Mine: the timer is the next diamond. (The
         -- island's hasMineReady can't tell two mines apart; the timer can.)
         if busy then return "mining diamonds, " .. durationText(secs) .. " left" end
@@ -4386,9 +4476,59 @@ local function structureStatus(id)
     return nil
 end
 
+-- A Wublin statue (asleep): the eggs it needs and has, as the INVENTORY
+-- screen shows them (BoxInventoryEggList.lua: one required entry per egg,
+-- the possessed list counts each), and its timer once the first egg is in.
+function FRIENDLY.__wublinStatus(uid)
+    local inactive = false
+    pcall(function() inactive = game.isInactiveBoxMonster(uid) and true or false end)
+    if not inactive then return nil end
+    local req, pos, n = nil, nil, 0
+    pcall(function() req = game.getRequiredBoxMonsterEggs(uid) end)
+    pcall(function() pos = game.getEggsInInactiveBoxMonster(uid) end)
+    pcall(function() n = req:size() end)
+    local order, by, have, total = {}, {}, 0, 0
+    for j = 0, n - 1 do
+        local raw, name, got = nil, nil, 0
+        pcall(function() raw = req[j]:strTitle() end)
+        raw = raw and tostring(raw) or nil
+        if raw and raw:find("^[%u%d_]+$") then pcall(function() name = LOC(raw) end) end
+        name = cleanText(name or raw or "") or ""
+        if name == "" then name = "egg" end
+        pcall(function() got = tonumber(pos[j]) or 0 end)
+        if not by[name] then by[name] = { need = 0, got = 0 }; order[#order + 1] = name end
+        by[name].need = by[name].need + 1
+        by[name].got = by[name].got + got
+        total = total + 1
+        have = have + got
+    end
+    if not menuState.wublinLogged then
+        menuState.wublinLogged = true
+        a11y_log("[wublin] uid " .. tostring(uid) .. ": " .. n .. " eggs, first=" .. tostring(order[1]))
+    end
+    local parts = { "statue" }
+    if total > 0 then
+        local list = {}
+        for _, nm in ipairs(order) do list[#list + 1] = nm .. " " .. by[nm].got .. " of " .. by[nm].need end
+        parts[#parts + 1] = have .. " of " .. total .. " eggs: " .. table.concat(list, ", ")
+    end
+    local expired, left = false, nil
+    pcall(function() expired = game.isUnderlingExpired(uid) and true or false end)
+    pcall(function() left = tonumber(game.underlingTime(uid)) end)
+    if expired then
+        parts[#parts + 1] = "time ran out"
+    elseif left and left > 0 and have > 0 then
+        parts[#parts + 1] = durationText(left) .. " left"
+    end
+    return table.concat(parts, ", ")
+end
+
 local function monsterStatus(uid)
     local ent = nil
     pcall(function() ent = game.GetMonster(uid) end)
+    local wub = nil
+    pcall(function() wub = FRIENDLY.__wublinStatus(uid) end)
+    if wub then return wub end
     local parts = {}
     -- The Colossingum: no feeding, likes or coins; monsters train instead.
     local battle = false
@@ -4474,13 +4614,17 @@ end
 -- usually several Small Trees and Rocks). Falls back to the type scan.
 local function islandStructureIds()
     local ids, seen = {}, {}
-    pcall(function()
+    local lok, lerr = pcall(function()
         local ss = game.player():getActiveIsland():structures()
         for i = 0, ss:size() - 1 do
             local id = ss[i]
             if id and not seen[id] then seen[id] = true; ids[#ids + 1] = id end
         end
     end)
+    if not FRIENDLY.__listErrLogged then
+        FRIENDLY.__listErrLogged = true
+        a11y_log("[kind] structures() -> " .. tostring(lok) .. " " .. tostring(lerr) .. ", " .. #ids .. " ids")
+    end
     if #ids == 0 then
         for t = 0, MAX_STRUCTURE_TYPE do
             local id = 0
@@ -4488,8 +4632,46 @@ local function islandStructureIds()
             if id ~= 0 and not seen[id] then seen[id] = true; ids[#ids + 1] = id end
         end
     end
+    -- The 2026-11-18 game update removed Island:structures() (it errors), so
+    -- the type scan above only finds the first object of each type. But
+    -- GetStructure still finds every object on the island on screen: ask for
+    -- the ids around the ones found. Cached per island for 5 seconds (about
+    -- 600 lookups). Decorations with the new negative ids are only found
+    -- when they're the first of their type.
+    local lo, hi = nil, nil
+    for _, id in ipairs(ids) do
+        if id > 0 then
+            if not lo or id < lo then lo = id end
+            if not hi or id > hi then hi = id end
+        end
+    end
+    if lo then
+        local iid = nil
+        pcall(function() iid = game.player():getActiveIsland():uniqueId() end)
+        local c, now = FRIENDLY.__gapCache, clock()
+        if not (c and c.island == iid and c.n == #ids and now - c.t < 5) then
+            c = { island = iid, n = #ids, t = now, extra = {} }
+            for i = math.max(1, lo - 200), hi + 300 do
+                if not seen[i] then
+                    local e = nil
+                    pcall(function() e = game.GetStructure(i) end)
+                    if e then c.extra[#c.extra + 1] = i end
+                end
+            end
+            FRIENDLY.__gapCache = c
+            if not FRIENDLY.__gapLogged then
+                FRIENDLY.__gapLogged = true
+                a11y_log("[kind] island list had " .. #ids .. ", lookups found " .. #c.extra .. " more, in "
+                    .. math.floor((clock() - now) * 1000) .. " ms")
+            end
+        end
+        for _, i in ipairs(c.extra) do
+            if not seen[i] then seen[i] = true; ids[#ids + 1] = i end
+        end
+    end
     return ids
 end
+FRIENDLY.__structIds = islandStructureIds
 
 local OBJECT_GROUPS = { [0] = "Buildings", [1] = "Monsters", [2] = "Decorations", [3] = "Trees and rocks", [4] = "Clearing" }
 
@@ -4539,12 +4721,10 @@ function FRIENDLY.__friendObjects()
             if not label or label == "" then label = structureLabel(id); how = "your data" end
             label = (label and label ~= "") and label or "Structure"
             -- Group: the object's own flags, else its structure data's type.
-            local rank = entityIs(ent, "isObstacle") and 3 or (entityIs(ent, "isDecoration") and 2 or 0)
-            if rank == 0 and eid then
-                local sd = nil
-                pcall(function() sd = game.getStructureByEntityId(eid) end)
-                if entityIs(sd, "isObstacle") then rank = 3 elseif entityIs(sd, "isDecoration") then rank = 2 end
-            end
+            local fsd = nil
+            if eid then pcall(function() fsd = game.getStructureByEntityId(eid) end) end
+            local rank = (fsd and FRIENDLY.__kindRank(nil, ent, fsd)) or FRIENDLY.__kindRank(nil, ent) or 0
+            if rank == 0 and entityIs(fsd, "isDecoration") then rank = 2 end
             if not FRIENDLY.__friendLogged and logged < 8 then
                 logged = logged + 1
                 a11y_log("[friend] structure " .. tostring(id) .. " eid " .. tostring(eid) .. " -> " .. tostring(label)
@@ -4604,8 +4784,32 @@ local function islandObjects()
     for _, id in ipairs(islandStructureIds()) do
         local ent = nil
         pcall(function() ent = game.GetStructure(id) end)
-        local label = structureLabel(id) or "Structure"
-        local rank = entityIs(ent, "isObstacle") and 3 or (entityIs(ent, "isDecoration") and 2 or 0)
+        local label = structureLabel(id)
+        if not label then
+            -- No structure data for this id (new-style decoration ids): name
+            -- it from the entity, as friend islands do.
+            local eid = nil
+            pcall(function() eid = tonumber(ent:entityId()) end)
+            if eid then
+                pcall(function() label = cleanText(LOC(game.getStructureByEntityId(eid):name())) end)
+                if not label or label == "" then label = FRIENDLY.__entityName(eid) end
+            end
+            if label == "" then label = nil end
+        end
+        label = label or "Structure"
+        local rank = FRIENDLY.__kindRank(id, ent) or 0
+        if not FRIENDLY.__kindLogged then
+            -- One line per structure, once per run: proves the grouping, and
+            -- names what an unnamed "Structure" really is.
+            local t, eid, en, dec = nil, nil, nil, nil
+            pcall(function() t = game.getStructureDataFromUniqueId(id):structureType() end)
+            pcall(function() eid = ent:entityId() end)
+            pcall(function() en = ent:entityName() end)
+            pcall(function() dec = ent:isDecoration() end)
+            a11y_log("[kind] s" .. tostring(id) .. " " .. tostring(label) .. " type " .. tostring(t)
+                .. " eid " .. tostring(eid) .. " entityName " .. tostring(en) .. " isDecoration " .. tostring(dec)
+                .. " -> rank " .. rank)
+        end
         -- Trees and rocks being removed, or done and waiting for a tap, get a
         -- group of their own ("Clearing"), only while there are any.
         local clearing = nil
@@ -4618,6 +4822,7 @@ local function islandObjects()
         structs[#structs + 1] = { id = id, label = label, rank = rank, clearing = clearing }
         total[label] = (total[label] or 0) + 1
     end
+    if #structs > 0 then FRIENDLY.__kindLogged = true end
     for _, st in ipairs(structs) do
         if total[st.label] > 1 then
             nth[st.label] = (nth[st.label] or 0) + 1
@@ -4816,6 +5021,14 @@ local function calibrate(dirX, dirY, gx, gy)
     end
 end
 
+-- "right of X", "below X", "below and left of X".
+function FRIENDLY.__dirOf(dir, name)
+    if dir == "above" or dir == "below" then return dir .. " " .. name end
+    local v, h = dir:match("^(%a+) (%a+)$")
+    if v then return v .. " and " .. h .. " of " .. name end
+    return dir .. " of " .. name
+end
+
 local function directionWords(dx, dy)
     local h = screenSign.sx * (dx + dy)
     local v = screenSign.sy * (dy - dx)
@@ -4833,18 +5046,16 @@ local function landmarks(noSkip)
     local skip = {}
     if not noSkip then
         pcall(function() skip[game.selectedMonsterId()] = true end)
-        pcall(function() skip[game.selectedStructureId()] = true end)
+        pcall(function() skip[FRIENDLY.__selSid()] = true end)
     end
     local out = {}
     pcall(function()
         local isl = game.player():getActiveIsland()
-        local ss = isl:structures()
-        for i = 0, ss:size() - 1 do
-            local id = ss[i]
+        for _, id in ipairs(islandStructureIds()) do
             local ent = nil; pcall(function() ent = game.GetStructure(id) end)
             local x, y = entityTile(ent)
             if x and not skip[id] then
-                local rank = entityIs(ent, "isObstacle") and 3 or (entityIs(ent, "isDecoration") and 2 or 1)
+                local rank = FRIENDLY.__kindRank(id, ent) or 1
                 out[#out + 1] = { x = x, y = y, name = structureLabel(id) or "structure", rank = rank }
             end
         end
@@ -4929,8 +5140,8 @@ local function whereText(cx, cy)
     if not best then return nil end
     if bestD == 0 then return "on " .. best.name end
     local dir = directionWords(x - best.x, y - best.y)
-    if bestD == 1 then return dir .. " of " .. best.name end
-    return bestD .. " tiles " .. dir .. " of " .. best.name
+    if bestD == 1 then return FRIENDLY.__dirOf(dir, best.name) end
+    return bestD .. " tiles " .. FRIENDLY.__dirOf(dir, best.name)
 end
 
 local function spotText()
@@ -5191,8 +5402,8 @@ do
         local d = abs(dx); if abs(dy) > d then d = abs(dy) end
         if d == 0 then return "on " .. target.name end
         local dir = directionWords(dx, dy)
-        if d == 1 then return dir .. " of " .. target.name end
-        return d .. " tiles " .. dir .. " of " .. target.name
+        if d == 1 then return FRIENDLY.__dirOf(dir, target.name) end
+        return d .. " tiles " .. FRIENDLY.__dirOf(dir, target.name)
     end
 
     -- ". Likes nearby: ..." for the spot reached (FRIENDLY.__likesNear).
@@ -6113,6 +6324,11 @@ local function navActivate()
         local up = label:upper()
         for _, w in ipairs({ "MARKET", "MAP", "BATTLE", "COLLECTION", "QUESTS", "VERSUS", "START BATTLE", "EXIT" }) do
             if up == w or up:find("^" .. w .. ",") then FRIENDLY.__lockKeys(label) end
+        end
+        -- GO on the map: travel to another island.
+        if up == "GO" or up:find("^GO,") then
+            FRIENDLY.__travelAt = clock()
+            FRIENDLY.__lockKeys(label, 8)
         end
     end
     if pressElement(el) then say(label, false) else say("Could not activate " .. label, true) end

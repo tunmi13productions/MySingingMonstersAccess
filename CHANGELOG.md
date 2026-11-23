@@ -10,11 +10,21 @@ What changed in each version of My Singing Monsters Access, newest first. Change
 
 ### Fixed
 
+- After the November game update, trees and rocks were listed under Buildings and decorations were mixed up; they are sorted into Trees and rocks and Decorations again.
+- Some decorations placed after the November game update were listed as "Structure" and Enter couldn't select them; they now have their real names, for example Moshroom Path, and Enter selects them.
+- After the November game update, many objects were missing from the island list (most decorations, extra Bakeries, the Bonus Nursery and more); they are all listed again.
 - Memory: turning over the first card of a pair no longer says "Match", monsters are named correctly, a matched card says which card it matched (for example "Card 1, Food, matched with card 8, Food"), and the prize cards at the end can be turned over and say what they give.
 - When a tree or rock is hidden behind something, Enter now zooms in for a closer try, and if that fails it says what is in front of it, for example "Fuzer is in front of it".
 - Mines say "mining diamonds" and how long is left, instead of "building", and "diamonds ready to collect" when done.
 - Number keys now work on lists of any length: they reach the first 20 items, and Tab goes on from there.
 - The Market's Packs now say what each pack gives, for example "158 Diamonds, $4.99 USD, 50% extra, was 105", and the exchanges say what they trade, for example "1 Relic for 1 Diamond".
+- Wublin statues say which eggs they need and how many are in, for example "statue, 0 of 4 eggs: Noggin 0 of 2, Toe Jammer 0 of 2", instead of "fed 0 of 4".
+- Travelling to another island with GO no longer crashes the game if you press keys while it loads.
+- Placing an object says "3 tiles below Gullp" and "below and left of", instead of "below of".
+- Gold Island's Place Monster screen reads its message when you have no monsters to place.
+- Goals no longer say two full stops before the reward.
+- The Recording Studio's guide pages are now read aloud, instead of only "Next".
+- On a friend's island, Enter on a Wishing Torch now selects it, so you can light it, instead of saying something is in front of it.
 
 ## 0.1.14-alpha - 2026-11-12
 

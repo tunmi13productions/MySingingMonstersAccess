@@ -666,6 +666,19 @@ local function socialLabel(el, name)
         if tickets then parts[#parts + 1] = tickets .. " tickets" end
         return table.concat(parts, ", "), true
     end
+    -- Sticker book: stickers, the page list, the Exchange's boxes.
+    if pn == "Album" and name:find("^CARD_%d+$") and FRIENDLY.__stickerLabel then
+        return FRIENDLY.__stickerLabel(el, name), true
+    end
+    if pn == "AlbumList" and name:find("^entry%d+$") and FRIENDLY.__albumPageLabel then
+        return FRIENDLY.__albumPageLabel(el, tonumber(name:match("%d+"))), true
+    end
+    if (name == "BuyButton" or name:find("^MysteryBox%d$")) and FRIENDLY.__boxLabel then
+        local box = name == "BuyButton" and p or el
+        local n = tonumber((elementName(box) or ""):match("^MysteryBox(%d)$"))
+        if n and elementName(parentOf(box)) ~= "card_album_store" then n = nil end
+        if n then return FRIENDLY.__boxLabel(box, n), true end
+    end
     if name == "Button" and pn == "StickerbookButton" then
         local stars = elementText(findNamed(el, "StarBar", 1))
         return "Sticker book" .. (stars and (", " .. stars) or ""), true
@@ -853,6 +866,11 @@ local function socialLabel(el, name)
     end
     -- INFO on a building with no close button: tapping outside closes it.
     if name == "FadedBG" and pn == "object_info" then return "Close", true end
+    -- A sticker shown big (card_album_card_popup): tapping around it closes it.
+    if name == "FadedBG" and pn == "card_album_card_popup" then return "Close", true end
+    if name == "Card" and pn == "card_album_card_popup" then
+        return "Sticker " .. (elementText(el) or ""), true
+    end
     if (name == "YesButton" or name == "NoButton") and (pn == "popup_text_entry" or pn == "popup_name_entry") then
         if name == "NoButton" then return "Cancel", true end
         local d = (elementText(findNamed(p, "Description", 1)) or ""):lower()
@@ -1736,6 +1754,7 @@ local function menuTick(root, file)
     if file == "login_base" and FRIENDLY.__loadingTick then pcall(FRIENDLY.__loadingTick, root) end
     if file == "newsflash" and FRIENDLY.__newsTick then pcall(FRIENDLY.__newsTick, root, now) end
     if file == "hype_game" and FRIENDLY.__hypeTick then pcall(FRIENDLY.__hypeTick, root, now) end
+    if file == "card_album" and FRIENDLY.__albumTick then pcall(FRIENDLY.__albumTick, root, now) end
     if FRIENDLY.__recHelp[file] then pcall(FRIENDLY.__recHelpTick, root, file, now) end
     if file == "clubbox_customization" and FRIENDLY.__mixTick then pcall(FRIENDLY.__mixTick, root, now) end
     if file == "empty" and FRIENDLY.__emptyTick then pcall(FRIENDLY.__emptyTick, now) end
@@ -3203,6 +3222,176 @@ function FRIENDLY.__hypeTick(root, now)
         local a, b, c = result:match("^%s*(%d+)%s*%*%s*(%d+)%s*=%s*(%d+)")
         if c then later(0.3, function() say("Result: " .. a .. " times " .. b .. ", " .. c .. " Hype!", true) end) end
     end
+end
+-- Sticker book (card_album, CardAlbum.lua). Like hype_game, the script's own
+-- fields are readable on its element: currentPage (page data),
+-- playerCardAlbum (what you own), cardAlbum (the album's data). Stickers
+-- have no names in the game data (only a number, stars and a picture), so
+-- say the number, the stars and whether you have it.
+function FRIENDLY.__stickerStars(r)
+    if not FRIENDLY.__starNames then
+        local m = {}
+        for k, v in pairs({ OneStar = "1 star", TwoStar = "2 stars", ThreeStar = "3 stars", FourStar = "4 stars",
+                FourStarGold = "4 gold stars", FiveStar = "5 stars", FiveStarGold = "5 gold stars" }) do
+            pcall(function() local n = game["CardRarity_" .. k]; if n ~= nil then m[n] = v end end)
+        end
+        FRIENDLY.__starNames = m
+    end
+    return r ~= nil and FRIENDLY.__starNames[r] or nil
+end
+function FRIENDLY.__albumEl()
+    local r = liveMenu("card_album")
+    return r and findNamed(r, "card_album", 2)
+end
+-- A field that may be a property or a method (luabind exposes both ways).
+function FRIENDLY.__field(obj, k)
+    local v = nil
+    pcall(function() v = obj[k] end)
+    if type(v) == "function" then
+        local ok, r = pcall(v, obj)
+        v = ok and r or nil
+    end
+    return v
+end
+function FRIENDLY.__stickerLabel(el, name)
+    local idx = tonumber(name:match("^CARD_(%d+)$"))
+    local num = elementText(el)
+    local parts = { "Sticker " .. tostring(num or idx) }
+    local g = FRIENDLY.__albumEl()
+    local cid, has = nil, nil
+    pcall(function() cid = g.currentPage:getCards()[idx - 1] end)
+    if cid ~= nil then
+        local cd = nil
+        pcall(function() cd = game.getCardData(cid) end)
+        local stars = cd and FRIENDLY.__stickerStars(FRIENDLY.__field(cd, "rarity"))
+        if stars then parts[#parts + 1] = stars end
+        pcall(function() has = g.playerCardAlbum:hasCard(cid) and true or false end)
+    end
+    if has == true then parts[#parts + 1] = "collected"
+    elseif has == false then parts[#parts + 1] = "not collected yet" end
+    if not FRIENDLY.__stickerLogged then
+        FRIENDLY.__stickerLogged = true
+        a11y_log("[sticker] " .. name .. " card " .. tostring(cid) .. " -> " .. table.concat(parts, ", "))
+    end
+    return table.concat(parts, ", ")
+end
+-- A page in the page list: "Year 1, 3 of 10 stickers".
+function FRIENDLY.__albumPageLabel(el, i)
+    local t = elementText(el) or ("Page " .. (i + 1))
+    local g = FRIENDLY.__albumEl()
+    pcall(function()
+        local pg = g.cardAlbum:getPages()[i]
+        local got = tonumber(g.playerCardAlbum:numCardsCollectedOnPage(pg:getId()))
+        local all = tonumber(pg:getCards():size())
+        if got and all then
+            t = t .. ", " .. (got >= all and ("complete, " .. all .. " stickers") or (got .. " of " .. all .. " stickers"))
+        end
+    end)
+    return t
+end
+-- The open page: name, progress and its rewards (only while shown).
+function FRIENDLY.__albumPageText(root)
+    local g = (elementName(root) == "card_album" and root) or findNamed(root, "card_album", 2)
+    local name = shownText(root, "PageNameText")
+    if not g or not name then return nil end
+    local parts = { name:sub(1, 1) .. name:sub(2):lower() }
+    pcall(function()
+        local got = tonumber(g.playerCardAlbum:numCardsCollectedOnPage(g.currentPage:getId()))
+        local all = tonumber(g.currentPage:getCards():size())
+        if got and all then parts[#parts + 1] = got .. " of " .. all .. " stickers collected" end
+    end)
+    local info = findNamed(g, "PageInfoPanel", 1)
+    local rl = info and findNamed(info, "RewardList", 1)
+    local rewards = {}
+    for i = 1, 4 do
+        local r = rl and findNamed(rl, "Reward" .. i, 1)
+        local t = r and shownText(r, "NameFrame")
+        if t then rewards[#rewards + 1] = (t:gsub("[%.!]+$", "")) end
+    end
+    if #rewards > 0 then parts[#parts + 1] = "Page rewards: " .. FRIENDLY.__andList(rewards) end
+    return joinSentences(parts)
+end
+FRIENDLY.__album = { at = -100 }
+function FRIENDLY.__albumTick(root, now)
+    local A = FRIENDLY.__album
+    if now - A.at > 1.5 then A.page = nil end
+    A.at = now
+    local g = findNamed(root, "card_album", 2)
+    if not g then return end
+    local pid = nil
+    pcall(function() pid = g.currentPage:getId() end)
+    if pid == nil then pid = shownText(root, "PageNameText") end
+    if pid ~= nil and pid ~= A.page then
+        local first = A.page == nil
+        A.page = pid
+        if not first then
+            -- Page changed (a page picked, Next, Previous): say it once the
+            -- page has filled in.
+            later(0.35, function()
+                local r = liveMenu("card_album")
+                local t = r and FRIENDLY.__albumPageText(r)
+                if t then say(t, true) end
+            end)
+        end
+    end
+end
+POPUP_READERS.card_album = function(popup)
+    local parts = { "Sticker book" }
+    local g = (elementName(popup) == "card_album" and popup) or findNamed(popup, "card_album", 2) or popup
+    pcall(function()
+        local nm = FRIENDLY.__field(g.cardAlbum, "name")
+        if type(nm) == "string" and nm ~= "" then parts[1] = "Sticker book: " .. cleanText(LOC(nm)) end
+    end)
+    pcall(function()
+        local got = tonumber(g.playerCardAlbum:numCardsCollected())
+        local all = tonumber(g.cardAlbum:numCards())
+        if got and all then parts[#parts + 1] = got .. " of " .. all .. " stickers collected" end
+    end)
+    local left = shownText(popup, "Timer")
+    if left and left ~= "0" then parts[#parts + 1] = left .. " left" end
+    local rf = findNamed(popup, "RewardFrame", 3)
+    local rewards = {}
+    for i = 1, 4 do
+        local r = rf and findNamed(rf, "Reward" .. i, 2)
+        local t = r and shownText(r, "NameFrame")
+        if t then rewards[#rewards + 1] = (t:gsub("[%.!]+$", "")) end
+    end
+    if #rewards > 0 then parts[#parts + 1] = "Album rewards: " .. FRIENDLY.__andList(rewards) end
+    local page = FRIENDLY.__albumPageText(popup)
+    if page then parts[#parts + 1] = page end
+    return joinSentences(parts)
+end
+-- Collector's Exchange (card_album_store.xml): MysteryBox1-3 are store
+-- items 1, 3 and 4.
+FRIENDLY.__boxIds = { 1, 3, 4 }
+function FRIENDLY.__boxLabel(box, n)
+    local id = FRIENDLY.__boxIds[n]
+    local nm = nil
+    pcall(function()
+        local d = game.getCardAlbumStoreItemData(id)
+        local v = FRIENDLY.__field(d, "name")
+        if type(v) == "string" and v ~= "" then nm = cleanText(LOC(v)) end
+    end)
+    local parts = { "Buy " .. (nm or ("Mystery Box " .. n)) }
+    local cost = shownText(box, "CurrencyAmount")
+    if cost then parts[#parts + 1] = cost .. " Sticker Stars" end
+    local counter = findNamed(box, "Counter", 1)
+    local bought = nil
+    pcall(function()
+        if counter:C("Text")("visible"):GetInt() ~= 0 then bought = cleanText(counter:C("Text")("text"):GetString()) end
+    end)
+    if bought and bought ~= "" then
+        local a, b = bought:match("^(%d+)%s*/%s*(%d+)$")
+        parts[#parts + 1] = a and ("bought " .. a .. " of " .. b) or bought
+    end
+    return table.concat(parts, ", ")
+end
+POPUP_READERS.card_album_store = function(popup)
+    local parts = { shownText(popup, "TitleText") or "Collector's Exchange",
+        "Turn in your duplicate Sticker Stars to open a Mystery Box" }
+    local have = shownText(popup, "CurrencyCounter")
+    if have then parts[#parts + 1] = "You have " .. have .. " Sticker Stars" end
+    return joinSentences(parts)
 end
 function FRIENDLY.__clubTick(root, now)
     local C = FRIENDLY.__club
@@ -6311,7 +6500,8 @@ local function navActivate()
         return
     end
     -- "Close" on INFO (its background): do what Escape does.
-    if elementName(el) == "FadedBG" and elementName(el:parent()) == "object_info" and FRIENDLY.__goBack then
+    if elementName(el) == "FadedBG" and FRIENDLY.__goBack
+        and (elementName(el:parent()) == "object_info" or elementName(el:parent()) == "card_album_card_popup") then
         FRIENDLY.__goBack("escape")
         return
     end
@@ -6446,6 +6636,14 @@ local function doBack()
                 pcall(game.popPopUp)
             end
         end)
+        return
+    end
+    -- A sticker shown big: its only way out is a tap around it, which runs
+    -- game.popPopUp (CardAlbumCardPopup.lua). Do the same.
+    if currentPopupName() == "card_album_card_popup" then
+        a11y_log("[back] closing the sticker view")
+        pcall(game.popPopUp)
+        say("Back to the sticker book", true)
         return
     end
     local onScreen = popupOpen() or topOverlay() ~= nil

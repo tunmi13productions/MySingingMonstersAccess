@@ -2,10 +2,11 @@
 
 What changed in each version of My Singing Monsters Access, newest first. Changes that are done but not yet in a release are listed under Unreleased.
 
-## Unreleased
+## 0.1.15-alpha - 2026-11-23
 
 ### Added
 
+- The Sticker book says which album it is, how many stickers you have, the time left and the album rewards. Each sticker says its number, its stars and whether you have it, each page in the list says how many of its stickers you have, and changing page says the page's progress and rewards. The Collector's Exchange names each Mystery Box and its price in Sticker Stars.
 - V (fallback Control+Shift+V) describes your island: which buildings are where, where your monsters are, which ones stand together or on their own, and which areas are empty. Press it twice quickly to hear everything in each area.
 
 ### Fixed
